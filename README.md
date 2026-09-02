@@ -42,11 +42,10 @@ minimaps still show, since an image is not subject to that rule.
 The plugin tries the site first every time, so it works with no change the day the site
 allows it. Until then, a *forwarder* — an address of your own that passes each request
 on to scmscx.com and adds the header — can be set in Settings; it is tried when the site
-itself does not answer. `forwarder/worker.js` is one, written for Cloudflare Workers:
-create a worker, paste the file in, deploy it, and enter the worker's address in
-Settings. It forwards GET requests for the routes below and nothing else. To make it the
-default for everyone who installs the plugin, put its address in `DEFAULT_SETTINGS` in
-`plugin.ts`.
+itself does not answer.
+[scm-js/cloudflare-scm-scx-forwarder](https://github.com/scm-js/cloudflare-scm-scx-forwarder)
+is one, written for Cloudflare Workers: deploy it from there and enter the worker's
+address in Settings. It forwards GET requests for the routes below and nothing else.
 
 ## The site's API
 
