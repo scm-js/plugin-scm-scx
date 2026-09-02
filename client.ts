@@ -271,9 +271,14 @@ export function mapInfoFrom(id: string, raw: RawInfo, names: RawFileName[] | nul
   const meta = raw.meta ?? {};
   const props = raw.properties ?? {};
   const owners = Array.isArray(raw.player_owners) ? raw.player_owners : [];
+  // The site lists one row per (file name, modified time); the dialog wants each name once, with its newest time.
   const fileNames: MapInfo["fileNames"] = [];
   for (const n of names ?? []) {
-    if (n && typeof n.filename === "string" && n.filename) fileNames.push({ name: n.filename, modified: seconds(n.modified_time) });
+    if (!n || typeof n.filename !== "string" || !n.filename) continue;
+    const modified = seconds(n.modified_time);
+    const have = fileNames.find((f) => f.name === n.filename);
+    if (!have) fileNames.push({ name: n.filename, modified });
+    else if (modified !== null && (have.modified === null || modified > have.modified)) have.modified = modified;
   }
   return {
     id,

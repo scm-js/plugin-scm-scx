@@ -288,7 +288,7 @@ function openFind(api: PluginApi) {
       const searchBtn = h("button", { className: "btn sm", type: "button", onClick: () => { void runSearch(); } }, "Search");
       const randomBtn = h("button", { className: "btn sm", type: "button", title: "One map at random among the matches", onClick: () => { void pickRandom(); } }, "Random");
       const select = (label: string, options: readonly (readonly [string, string])[], onChange: () => void) =>
-        h("select", { className: "select", "aria-label": label, onChange }, ...options.map(([v, text]) => h("option", { value: v }, text)));
+        h("select", { className: "select", style: "width: auto", "aria-label": label, onChange }, ...options.map(([v, text]) => h("option", { value: v }, text)));
       const sortSel = select("Sort", SORTS, () => runSearch());
       sortSel.value = settings.sort;
       const tilesetSel = select("Tileset", [["", "Any tileset"], ...TILESETS.map((t, i) => [t, TILESET_NAMES[i]] as const)], () => runSearch());

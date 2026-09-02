@@ -73,12 +73,12 @@ describe("mapInfoFrom", () => {
     properties: { width: 128, height: 128, tileset: 1, ver: 206, triggers: 82, briefing_triggers: 2, units: 70, locations: 255, doodads: 0, sprites: 84, unique_terrain_tiles: 348, get_death_euds: 1, set_death_euds: 40, eups: 0 },
   };
   it("reads the details, counts players by owner and keeps the file names", () => {
-    const info = mapInfoFrom("35b32Dsq", RAW, [{ filename: "s.scx", modified_time: 1786510907 }, { filename: "" }]);
+    const info = mapInfoFrom("35b32Dsq", RAW, [{ filename: "s.scx", modified_time: 1786510907 }, { filename: "" }, { filename: "s.scx", modified_time: 1786510000 }, { filename: "t.scm", modified_time: 3 }]);
     expect(info).toMatchObject({
       id: "35b32Dsq", name: "Space Odyssey", description: "desc\r\nmore", chkHash: "c", mpqHash: "m", mpqSize: 3777275,
       width: 128, height: 128, tileset: 1, version: 206, triggers: 82, briefingTriggers: 2, units: 70, locations: 255, sprites: 84,
       eudReads: 1, eudWrites: 40, humans: 4, computers: 4, uploadedBy: "anonymous", uploaded: 1788310869, downloads: 2, views: 6,
-      fileNames: [{ name: "s.scx", modified: 1786510907 }], url: `${SCMSCX}/map/35b32Dsq`,
+      fileNames: [{ name: "s.scx", modified: 1786510907 }, { name: "t.scm", modified: 3 }], url: `${SCMSCX}/map/35b32Dsq`,
     });
     expect(info.forces).toEqual([{ name: "Air Force 1", players: [0, 1, 2, 3] }, { name: "Force 4", players: [] }]);
   });
