@@ -8,13 +8,18 @@
  *   order, tileset, players and size, read a map's details with its minimap, and open
  *   it in the editor. A pasted map address (`https://scmscx.com/map/…`) opens that map's
  *   details straight away; Random picks one of the matches.
- * - Plugins ▸ scmscx.com Settings…: an optional forwarder address, for when the page
- *   cannot read the site directly.
+ * - Plugins ▸ scmscx.com Settings…: the forwarder address, for when the page cannot
+ *   read the site directly.
  *
- * The plugin talks to scmscx.com itself, and to nothing else. The site's API sends no
- * CORS headers, so a browser lets only pages served from scmscx.com read its answers;
- * from anywhere else the connection fails, and the dialog says so and points at the
- * site instead. Both menu items carry the plugin's mark, since they reach the network.
+ * The site's API sends no CORS headers, so a browser lets only pages served from
+ * scmscx.com read its answers. The plugin asks the site first every time — so it needs
+ * nothing extra the day the site allows it, and nothing at all from an editor served
+ * there — and otherwise goes through a *forwarder*, a worker that passes each request
+ * on to the site and adds the header. `DEFAULT_FORWARDER` below is the one that ships
+ * (source at https://github.com/scm-js/cloudflare-scm-scx-forwarder), so an editor
+ * served from anywhere else sends its searches through that host; Settings replaces it
+ * or empties it. Nothing else is ever contacted. Both menu items carry the plugin's
+ * mark, since they reach the network.
  *
  * `client.ts` is the typed client for the site's routes, `format.ts` the labels. This
  * file is the dialogs: plain DOM with a small `h()` builder and a scoped stylesheet, as
@@ -100,7 +105,14 @@ interface Settings {
   sort: Sort;
 }
 
-const DEFAULT_SETTINGS: Settings = { forwarder: "", lastQuery: "", sort: "relevancy" };
+/**
+ * The forwarder everyone gets: https://github.com/scm-js/cloudflare-scm-scx-forwarder,
+ * deployed. It is only reached when scmscx.com itself does not answer, which today means
+ * any editor not served from scmscx.com. Settings replaces it with your own.
+ */
+const DEFAULT_FORWARDER = "https://cloudflare-scm-scx-forwarder.rebecca-s-sterling.workers.dev";
+
+const DEFAULT_SETTINGS: Settings = { forwarder: DEFAULT_FORWARDER, lastQuery: "", sort: "relevancy" };
 
 function loadSettings(api: PluginApi): Settings {
   return { ...DEFAULT_SETTINGS, ...api.storage.get<Partial<Settings>>("settings", {}) };
@@ -143,7 +155,7 @@ function unreachableNotice(err: ScmscxError, query: string, onSettings: () => vo
   box.append(
     h("p", null, "scmscx.com could not be reached from this page."),
     h("p", { className: "sx-dim" }, "The site's API sends no CORS header, so a browser lets only pages served from scmscx.com read its answers. Until the site allows it, search there in a new tab, download the map, and drop the file onto the editor."),
-    h("p", { className: "sx-dim" }, "If you run a forwarder that passes requests on to scmscx.com, enter its address in Settings and it is tried after the site itself."),
+    h("p", { className: "sx-dim" }, "The forwarder that would otherwise pass the requests on did not answer either. Settings has its address; you can point it at one of your own."),
   );
   if (err.attempts.length) {
     box.append(h("ul", { className: "sx-attempts sx-faint" }, ...err.attempts.map((a) => h("li", null, `${a.base} — ${a.reason}`))));
@@ -179,7 +191,7 @@ async function openMap(api: PluginApi, client: ScmscxClient, info: MapInfo, stat
 function openSettings(api: PluginApi) {
   const s = loadSettings(api);
   const status = statusLine();
-  const forwarder = h("input", { className: "input sx-grow", type: "text", placeholder: "https://forwarder.example.com", value: s.forwarder });
+  const forwarder = h("input", { className: "input sx-grow", type: "text", placeholder: DEFAULT_FORWARDER, value: s.forwarder });
   const report = h("div", { className: "sx-dim" });
 
   const save = () => {
@@ -219,7 +231,7 @@ function openSettings(api: PluginApi) {
       root.append(
         h("div", { className: "sx-sec" },
           h("header", null, "Connection"),
-          h("p", { className: "sx-dim" }, `Requests go to ${SCMSCX} first. The site's API sends no CORS header, so a page served from anywhere else cannot read its answers; a forwarder — an address of your own that passes each request on to the site — is tried next when one is set.`),
+          h("p", { className: "sx-dim" }, `Requests go to ${SCMSCX} first. The site's API sends no CORS header, so a page served from anywhere else cannot read its answers; a forwarder — an address that passes each request on to the site — is tried next. The plugin comes with one; put your own here to use it instead, or empty the field for none.`),
           h("div", { className: "sx-row" }, h("label", null, "Forwarder"), forwarder, h("button", { className: "btn sm", type: "button", onClick: () => { void test(); } }, "Test")),
           report,
         ),

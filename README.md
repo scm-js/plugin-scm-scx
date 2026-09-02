@@ -2,9 +2,10 @@
 
 A plugin for [scmJS](https://github.com/jeany55/scm-js), the browser-based StarCraft 1 /
 Brood War map editor. It searches [scmscx.com](https://scmscx.com), an archive of
-StarCraft maps, from inside the editor and opens the map you pick. The plugin talks to
-scmscx.com and to nothing else; the two menu items it adds carry its mark (a magnifier
-over a map tile, in teal) so it is plain which entries leave the browser.
+StarCraft maps, from inside the editor and opens the map you pick. It reaches
+scmscx.com and the forwarder below and nothing else; the two menu items it adds carry
+its mark (a magnifier over a map tile, in teal) so it is plain which entries leave the
+browser.
 
 ## Install
 
@@ -29,23 +30,34 @@ and press **Add**. It is in that list by default. To pin a version, add a ref:
   forces. **Open** downloads it and opens it in the editor (a modified map goes through
   the usual Close Scenario question first). **Random** picks one map among the matches.
   Pasting a map address from the site (`https://scmscx.com/map/…`) shows that map.
-- **Plugins ▸ scmscx.com Settings…**. An optional forwarder address, and a test.
+- **Plugins ▸ scmscx.com Settings…**. The forwarder address, and a test.
 
 ## Reaching the site
 
 Requests go to `https://scmscx.com` directly. Its API sends no CORS header, so a browser
 lets only pages served from scmscx.com read the answers: from an editor served anywhere
-else the connection fails, and the dialog says so, links to the site's search page for
-the query, and reminds you that a downloaded map can be dropped onto the editor. The
-minimaps still show, since an image is not subject to that rule.
+else that first try fails. The minimaps still show either way, since an image is not
+subject to that rule.
 
-The plugin tries the site first every time, so it works with no change the day the site
-allows it. Until then, a *forwarder* — an address of your own that passes each request
-on to scmscx.com and adds the header — can be set in Settings; it is tried when the site
-itself does not answer.
+So the plugin then goes through a *forwarder* — an address that passes each request on
+to scmscx.com and adds the header. One ships as the default, so the plugin works out of
+the box from any editor:
+
+```
+https://cloudflare-scm-scx-forwarder.rebecca-s-sterling.workers.dev
+```
+
+Which means that, unless your editor is served from scmscx.com, your searches reach the
+site by way of that host. Its source is
 [scm-js/cloudflare-scm-scx-forwarder](https://github.com/scm-js/cloudflare-scm-scx-forwarder)
-is one, written for Cloudflare Workers: deploy it from there and enter the worker's
-address in Settings. It forwards GET requests for the routes below and nothing else.
+— a Cloudflare Worker that forwards GET requests for the routes below and nothing else,
+keeps nothing, and needs no account. Deploy your own from that repository and put its
+address in Settings to use it instead, or empty the field for no forwarder at all.
+
+The site is asked first every time, so nothing changes for an editor served from
+scmscx.com, and the forwarder falls out of the picture the day the site sends the
+header. If neither answers, the dialog says so, links to the site's search page for the
+query, and reminds you that a downloaded map can be dropped onto the editor.
 
 ## The site's API
 
