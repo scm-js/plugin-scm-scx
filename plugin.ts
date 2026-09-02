@@ -182,8 +182,17 @@ async function openMap(api: PluginApi, client: ScmscxClient, info: MapInfo, stat
   status(`Opening ${fileName}…`);
   const opened = await api.document.open(bytes, fileName);
   if (!opened) { status("The map was not opened."); return false; }
-  api.ui.status(`Opened ${fileName} from scmscx.com`);
+  api.ui.status(`Opened ${fileName} from scmscx.com${describeOpened(api)}`);
   return true;
+}
+
+/** What actually landed, read back off the open map — the site's own metadata is often wrong. */
+function describeOpened(api: PluginApi): string {
+  const info = api.document.info();
+  const stats = api.query.statistics();
+  if (!info) return "";
+  const starts = api.query.startLocations().length;
+  return ` — ${info.width} × ${info.height} ${info.tileset}${starts > 0 ? `, ${starts} start locations` : ""}${stats ? `, ${stats.units.total} units` : ""}`;
 }
 
 /* ── Settings dialog ────────────────────────────────────── */
@@ -519,6 +528,10 @@ function openFind(api: PluginApi) {
 /* ── Activation ─────────────────────────────────────────── */
 
 export default function activate(api: PluginApi) {
-  api.menu.add("File", { label: "Find on scmscx.com…", icon: "plugin", after: "Open Recent", run: () => openFind(api) });
-  api.menu.add("Plugins", { label: "scmscx.com Settings…", icon: "plugin", run: () => openSettings(api) });
+  // Named actions, so another plugin (or a future command palette) can open the search.
+  api.commands.register({ id: "find", title: "Find on scmscx.com…", run: () => openFind(api) });
+  api.commands.register({ id: "settings", title: "scmscx.com Settings…", run: () => openSettings(api) });
+
+  api.menu.add("File", { label: "Find on scmscx.com…", icon: "plugin", after: "Open Recent", command: "find" });
+  api.menu.add("Plugins", { label: "scmscx.com Settings…", icon: "plugin", command: "settings" });
 }
