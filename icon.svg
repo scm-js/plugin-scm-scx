@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="scmscx.com">
+  <!-- A magnifier over a map tile: the archive is searched, and what comes back is a map.
+       Teal like the editor's accent and three shapes, so it still reads at 14 px beside a
+       menu item. -->
+  <rect x="2.5" y="2.5" width="11" height="11" rx="1.6" fill="#4fd1c5"/>
+  <circle cx="14" cy="14" r="5" fill="none" stroke="#4fd1c5" stroke-width="2.4"/>
+  <path d="M17.8 17.8 21.5 21.5" stroke="#4fd1c5" stroke-width="2.8" stroke-linecap="round" fill="none"/>
+</svg>
