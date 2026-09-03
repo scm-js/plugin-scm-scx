@@ -44,7 +44,7 @@ to scmscx.com and adds the header. One ships as the default, so the plugin works
 the box from any editor:
 
 ```
-https://cloudflare-scm-scx-forwarder.rebecca-s-sterling.workers.dev
+https://scm-scx-forwarder.scmjs.dev
 ```
 
 Which means that, unless your editor is served from scmscx.com, your searches reach the

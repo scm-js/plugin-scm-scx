@@ -110,7 +110,7 @@ interface Settings {
  * deployed. It is only reached when scmscx.com itself does not answer, which today means
  * any editor not served from scmscx.com. Settings replaces it with your own.
  */
-const DEFAULT_FORWARDER = "https://cloudflare-scm-scx-forwarder.rebecca-s-sterling.workers.dev";
+const DEFAULT_FORWARDER = "https://scm-scx-forwarder.scmjs.dev";
 
 const DEFAULT_SETTINGS: Settings = { forwarder: DEFAULT_FORWARDER, lastQuery: "", sort: "relevancy" };
 
