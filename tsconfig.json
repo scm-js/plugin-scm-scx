@@ -15,5 +15,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["plugin.ts", "client.ts", "format.ts", "plugin-api"]
+  "include": ["plugin.ts", "client.ts", "format.ts"]
 }

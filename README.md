@@ -80,8 +80,9 @@ One map is fetched at a time, when you pick it. Nothing is fetched in bulk.
 
 `plugin.ts` is the dialogs (plain DOM), `client.ts` the typed client for the routes above
 (`fetch` injected, so the tests answer requests themselves), `format.ts` the labels.
-`plugin-api/` is the editor's emitted type declarations, vendored so the repository
-type-checks alone.
+Types come from [`@scm-js/plugin-api`](https://github.com/scm-js/plugin-api), a devDependency
+generated from the editor's own `src/plugins/api.ts`; `npm update @scm-js/plugin-api` takes the
+newest contract.
 
 ```sh
 npm install

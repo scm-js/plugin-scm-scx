@@ -23,10 +23,11 @@
  *
  * `client.ts` is the typed client for the site's routes, `format.ts` the labels. This
  * file is the dialogs: plain DOM with a small `h()` builder and a scoped stylesheet, as
- * the other scm-js plugins do. `plugin-api/` is the editor's emitted type declarations,
- * vendored so the repository type-checks alone; the host erases the type-only import.
+ * the other scm-js plugins do. `@scm-js/plugin-api` is the editor's type declarations, a
+ * devDependency generated from its own `src/plugins/api.ts`; the host erases the type-only
+ * import.
  */
-import type { DialogHandle, PluginApi } from "./plugin-api/plugins/api";
+import type { DialogHandle, PluginApi } from "@scm-js/plugin-api";
 import { minimapUrl, ScmscxClient, ScmscxError, SCMSCX, SORTS, TILESETS, type MapInfo, type SearchQuery, type SearchRow, type Sort, type TilesetKey } from "./client";
 import { downloadName, eudLabel, formatDate, formatSize, normalizeAddress, objectsLabel, parseMapRef, playersLabel, TILESET_NAMES, tilesetName, triggersLabel, versionName } from "./format";
 
