@@ -1,7 +1,7 @@
 {
   "name": "scmscx.com",
   "id": "scm-scx",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Search scmscx.com, the StarCraft map archive, and open a map from it in the editor. The one item this plugin adds reaches scmscx.com over the network; its mark sits beside it.",
   "author": "Jeany",
   "homepage": "https://github.com/scm-js/plugin-scm-scx",

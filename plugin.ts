@@ -78,8 +78,8 @@ const STYLE = `
 .sx .sx-item:hover { background: var(--bg-2, #1b1f27); }
 .sx .sx-item.on { background: var(--sel, #2b4f80); color: #fff; }
 .sx .sx-item.on .sx-dim, .sx .sx-item.on .sx-faint { color: rgba(255,255,255,.75); }
-.sx .sx-thumb { width: 44px; height: 44px; display: grid; place-items: center; background: var(--bg-1, #14171d); border: 1px solid var(--border, #333); border-radius: 3px; overflow: hidden; }
-.sx .sx-thumb img { max-width: 100%; max-height: 100%; image-rendering: pixelated; }
+.sx .sx-thumb { position: relative; width: 44px; height: 44px; display: grid; place-items: center; background: var(--bg-1, #14171d); border: 1px solid var(--border, #333); border-radius: 3px; overflow: hidden; }
+.sx .sx-thumb img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
 .sx .sx-thumb.none { color: var(--text-faint, #6b7382); font-size: 10px; }
 .sx .sx-item-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .sx .sx-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -89,6 +89,9 @@ const STYLE = `
 .sx .sx-details p { margin: 0; white-space: pre-wrap; word-break: break-word; }
 .sx .sx-bigframe { position: relative; overflow: hidden; min-height: 110px; display: grid; place-items: center; background: var(--bg-0, #0a0c10); border: 1px solid var(--border, #333); color: var(--text-faint, #6b7382); font-size: 10px; }
 .sx .sx-bigframe.none { min-height: 34px; }
+.sx .sx-shot { opacity: 0; }
+.sx .sx-shot.ready { opacity: 1; }
+.sx .sx-shot-wait { position: absolute; left: 0; top: 0; right: 0; }
 .sx .sx-details .sx-big { width: 100%; max-height: 200px; object-fit: contain; image-rendering: pixelated; }
 .sx .sx-kv { display: grid; grid-template-columns: 76px 1fr; gap: 2px 8px; }
 .sx .sx-kv > span:nth-child(odd) { color: var(--text-dim, #99a2b3); }
@@ -477,16 +480,24 @@ function openFind(api: PluginApi) {
         };
       };
 
-      /** A minimap that reads as loading until the picture is there: a grey block in its place, then the picture. */
+      /**
+       * A minimap that reads as loading until the picture is there: a grey block over it, then the picture.
+       *
+       * The image keeps its box while it loads and the block is laid *over* it. Hiding it
+       * instead (`img.hidden`, which is `display: none`) meant a `loading="lazy"` image was
+       * never in the viewport, so the browser never fetched it and the load event that would
+       * have shown it never came — the list's thumbnails stayed grey blocks for ever.
+       */
       const picture = (id: string, className: string, missing: string) => {
         const box = h("div", { className });
         const thumb = className === "sx-thumb";
-        const img = h("img", thumb ? { src: minimapUrl(id), alt: "", loading: "lazy" } : { className: "sx-big", src: minimapUrl(id), alt: "" });
-        const placeholder = w.skeleton({ block: true, height: thumb ? 44 : 110 });
-        img.hidden = true;
-        img.addEventListener("load", () => { placeholder.remove(); img.hidden = false; });
+        const img = h("img", thumb
+          ? { className: "sx-shot", src: minimapUrl(id), alt: "", loading: "lazy" }
+          : { className: "sx-big sx-shot", src: minimapUrl(id), alt: "" });
+        const placeholder = w.skeleton({ block: true, height: thumb ? 44 : 110, className: "sx-shot-wait" });
+        img.addEventListener("load", () => { placeholder.remove(); img.classList.add("ready"); });
         img.addEventListener("error", () => { box.className = `${className} none`; box.textContent = missing; });
-        box.append(placeholder, img);
+        box.append(img, placeholder);
         return box;
       };
 
