@@ -55,7 +55,10 @@ Which means that, unless your editor is served from scmscx.com, your searches re
 site by way of that host. Its source is
 [scm-js/cloudflare-scm-scx-forwarder](https://github.com/scm-js/cloudflare-scm-scx-forwarder)
 — a Cloudflare Worker that forwards GET requests for the routes below and nothing else,
-keeps nothing, and needs no account. Deploy your own from that repository and put its
+and needs no account. It keeps the site's *answers* for a while, so that a map's details
+are asked for once rather than once per reader — seven days for a map's details, six
+hours for its file names, five minutes for a search, never for a random pick — and keeps
+nothing about who asked for them. Deploy your own from that repository and put its
 address in Settings to use it instead, or empty the field for no forwarder at all.
 
 The site is asked first every time, so nothing changes for an editor served from
