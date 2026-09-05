@@ -34,6 +34,8 @@ var ScmscxError = class extends Error {
         return `scmscx.com did not answer: ${this.message}`;
       case "not_found":
         return "scmscx.com has no such map.";
+      case "aborted":
+        return "Stopped.";
       case "bad_response":
         return this.message;
       default:
@@ -41,6 +43,10 @@ var ScmscxError = class extends Error {
     }
   }
 };
+function wasAborted(err) {
+  if (err instanceof ScmscxError) return err.code === "aborted";
+  return !!err && typeof err === "object" && err.name === "AbortError";
+}
 var DEFAULT_MAX_SIZE = 256;
 var DEFAULT_MAX_PLAYERS = 12;
 function searchPath(q) {
@@ -163,6 +169,7 @@ function mapInfoFrom(id, raw, names) {
     url: mapPageUrl(id)
   };
 }
+var stopped = () => new ScmscxError("aborted", "The request was stopped.");
 var ScmscxClient = class {
   bases;
   active = null;
@@ -181,13 +188,14 @@ var ScmscxClient = class {
    * and hand back what it answered: the newest uploads. Throws `unreachable` with one
    * reason per base when none does.
    */
-  async connect() {
+  async connect(opts = {}) {
     const attempts = [];
     for (const base of this.bases) {
       let res;
       try {
-        res = await this.fetchImpl(`${base}${searchPath({ sort: "timeuploadednew" })}`, { headers: { accept: "application/json" } });
+        res = await this.fetchImpl(`${base}${searchPath({ sort: "timeuploadednew" })}`, { headers: { accept: "application/json" }, signal: opts.signal });
       } catch (err) {
+        if (wasAborted(err)) throw stopped();
         attempts.push({ base, reason: err instanceof Error ? err.message : String(err) });
         continue;
       }
@@ -198,7 +206,8 @@ var ScmscxClient = class {
       let body;
       try {
         body = JSON.parse(await res.text());
-      } catch {
+      } catch (err) {
+        if (wasAborted(err)) throw stopped();
         attempts.push({ base, reason: "answered with something that is not the search API" });
         continue;
       }
@@ -211,54 +220,99 @@ var ScmscxClient = class {
     }
     throw new ScmscxError("unreachable", attempts.map((a) => `${a.base}: ${a.reason}`).join("; "), 0, attempts);
   }
-  async search(q) {
-    const body = await this.json(searchPath(q));
+  async search(q, opts = {}) {
+    const body = await this.json(searchPath(q), opts.signal);
     if (!isSearchBody(body)) throw new ScmscxError("bad_response", "scmscx.com answered the search with something unexpected.");
     return resultFrom(body);
   }
   /** One random map id among the query's matches. */
-  async random(q) {
-    const body = await this.json(randomPath(q));
+  async random(q, opts = {}) {
+    const body = await this.json(randomPath(q), opts.signal);
     if (typeof body !== "string" || !body) throw new ScmscxError("bad_response", "scmscx.com answered the random pick with something unexpected.");
     return body;
   }
   /** A map's details, with the file names the site knows it under (best effort). */
-  async mapInfo(id) {
-    const raw = await this.json(`/api/uiv2/map_info/${encodeURIComponent(id)}`);
+  async mapInfo(id, opts = {}) {
+    const raw = await this.json(`/api/uiv2/map_info/${encodeURIComponent(id)}`, opts.signal);
     if (!raw || typeof raw !== "object" || !raw.meta?.mpq_hash) throw new ScmscxError("bad_response", "scmscx.com answered without the map's file hash.");
     let names = null;
     try {
-      const got = await this.json(`/api/uiv2/filenames2/${encodeURIComponent(id)}`);
+      const got = await this.json(`/api/uiv2/filenames2/${encodeURIComponent(id)}`, opts.signal);
       names = Array.isArray(got) ? got : null;
-    } catch {
+    } catch (err) {
+      if (wasAborted(err)) throw stopped();
       names = null;
     }
     return mapInfoFrom(id, raw, names);
   }
-  /** The map file — the archive as uploaded — by its MPQ hash. */
-  async file(mpqHash) {
-    const res = await this.request(`/api/maps/${encodeURIComponent(mpqHash)}`, "application/octet-stream");
-    return new Uint8Array(await res.arrayBuffer());
+  /**
+   * The map file — the archive as uploaded — by its MPQ hash. With `onProgress` the body
+   * is read chunk by chunk so the caller can draw a bar; `content-length` gives the total
+   * where the answer carries one, and null where it does not.
+   */
+  async file(mpqHash, opts = {}) {
+    const res = await this.request(`/api/maps/${encodeURIComponent(mpqHash)}`, "application/octet-stream", opts.signal);
+    const header = res.headers.get("content-length");
+    const total = header && /^\d+$/.test(header) ? Number(header) : null;
+    const reader = opts.onProgress ? res.body?.getReader?.() : void 0;
+    if (!opts.onProgress || !reader) {
+      const bytes = new Uint8Array(await this.body(res, opts.signal));
+      opts.onProgress?.(bytes.length, total ?? bytes.length);
+      return bytes;
+    }
+    const chunks = [];
+    let loaded = 0;
+    opts.onProgress(0, total);
+    try {
+      for (; ; ) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        chunks.push(value);
+        loaded += value.length;
+        opts.onProgress(loaded, total);
+      }
+    } catch (err) {
+      if (wasAborted(err)) throw stopped();
+      throw new ScmscxError("network", err instanceof Error ? err.message : String(err));
+    }
+    const out = new Uint8Array(loaded);
+    let at = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, at);
+      at += chunk.length;
+    }
+    return out;
   }
   /* ── plumbing ── */
-  async ensure() {
-    return this.active ?? (await this.connect()).base;
+  async ensure(signal) {
+    return this.active ?? (await this.connect({ signal })).base;
   }
-  async json(path) {
-    const res = await this.request(path, "application/json");
-    const text = await res.text();
+  async json(path, signal) {
+    const res = await this.request(path, "application/json", signal);
+    const text = new TextDecoder().decode(await this.body(res, signal));
     try {
       return JSON.parse(text);
     } catch {
       throw new ScmscxError("bad_response", `scmscx.com answered ${res.status} with something that is not JSON.`, res.status);
     }
   }
-  async request(path, accept) {
-    const base = await this.ensure();
+  /** Read a body, turning a give-up into `aborted` and anything else into `network`. */
+  async body(res, signal) {
+    try {
+      return await res.arrayBuffer();
+    } catch (err) {
+      if (wasAborted(err) || signal?.aborted) throw stopped();
+      throw new ScmscxError("network", err instanceof Error ? err.message : String(err));
+    }
+  }
+  async request(path, accept, signal) {
+    const base = await this.ensure(signal);
     let res;
     try {
-      res = await this.fetchImpl(`${base}${path}`, { headers: { accept } });
+      res = await this.fetchImpl(`${base}${path}`, { headers: { accept }, signal });
     } catch (err) {
+      if (wasAborted(err)) throw stopped();
       throw new ScmscxError("network", err instanceof Error ? err.message : String(err));
     }
     if (res.ok) return res;
@@ -375,10 +429,6 @@ var STYLE = `
 .sx .sx-faint { color: var(--text-faint, #6b7382); }
 .sx .sx-sec { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--border, #333); border-radius: 4px; background: var(--bg-1, #14171d); }
 .sx .sx-sec > header { display: flex; align-items: center; gap: 8px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-dim, #99a2b3); }
-.sx .sx-status { min-height: 16px; color: var(--text-dim, #99a2b3); }
-.sx .sx-status.error { color: #ffb3b0; }
-.sx .sx-status.ok { color: var(--ok, #5cb85c); }
-.sx .btn.sm { height: 22px; padding: 0 8px; font-size: 11px; min-width: 0; }
 .sx .sx-num { width: 58px; }
 .sx .sx-find { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; min-height: 0; flex: 1; }
 .sx .sx-results { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
@@ -396,13 +446,16 @@ var STYLE = `
 .sx .sx-details { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow: auto; padding: 8px; border: 1px solid var(--border, #333); border-radius: 4px; background: var(--bg-1, #14171d); }
 .sx .sx-details h3 { margin: 0; font-size: 13px; }
 .sx .sx-details p { margin: 0; white-space: pre-wrap; word-break: break-word; }
-.sx .sx-details .sx-big { width: 100%; max-height: 200px; object-fit: contain; image-rendering: pixelated; background: var(--bg-0, #0a0c10); border: 1px solid var(--border, #333); }
+.sx .sx-bigframe { position: relative; overflow: hidden; min-height: 110px; display: grid; place-items: center; background: var(--bg-0, #0a0c10); border: 1px solid var(--border, #333); color: var(--text-faint, #6b7382); font-size: 10px; }
+.sx .sx-bigframe.none { min-height: 34px; }
+.sx .sx-details .sx-big { width: 100%; max-height: 200px; object-fit: contain; image-rendering: pixelated; }
 .sx .sx-kv { display: grid; grid-template-columns: 76px 1fr; gap: 2px 8px; }
 .sx .sx-kv > span:nth-child(odd) { color: var(--text-dim, #99a2b3); }
 .sx .sx-kv > span:nth-child(even) { word-break: break-word; }
 .sx a { color: var(--teal, #4fd1c5); }
 .sx .sx-check { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
 .sx .sx-attempts { margin: 0; padding-left: 16px; }
+.sx .sx-ghost { cursor: default; }
 `;
 var DEFAULT_FORWARDER = "https://scm-scx-forwarder.scmjs.dev";
 var DEFAULT_SETTINGS = { forwarder: DEFAULT_FORWARDER, lastQuery: "", sort: "relevancy" };
@@ -417,21 +470,32 @@ function basesFor(settings) {
   return forwarder ? [SCMSCX, forwarder] : [SCMSCX];
 }
 var problem = (err) => err instanceof ScmscxError ? err.sentence : err instanceof Error ? err.message : String(err);
-function statusLine() {
-  const el = h("div", { className: "sx-status" });
-  return {
-    el,
-    set(text, kind) {
-      el.textContent = text;
-      el.className = `sx-status${kind ? ` ${kind}` : ""}`;
-    }
-  };
+function report(status, err) {
+  if (wasAborted(err)) status.set("Stopped.");
+  else status.set(problem(err), "error");
+}
+function ghostRows(w, count = 8) {
+  const widths = [78, 56, 88, 64, 72, 49, 83, 61];
+  return Array.from(
+    { length: count },
+    (_, i) => h(
+      "div",
+      { className: "sx-item sx-ghost", "aria-hidden": "true" },
+      h("div", { className: "sx-thumb" }, w.skeleton({ block: true, height: 44 })),
+      h("div", { className: "sx-item-text" }, w.skeleton({ width: `${widths[i % widths.length]}%` }), w.skeleton({ width: `${Math.max(24, widths[(i + 3) % widths.length] - 26)}%` }))
+    )
+  );
+}
+function ghostDetails(w) {
+  const kv = h("div", { className: "sx-kv" });
+  for (const width of ["70%", "90%", "55%", "80%", "45%", "65%"]) kv.append(w.skeleton({ width: "60%" }), w.skeleton({ width }));
+  return kv;
 }
 function siteSearchUrl(query) {
   const q = query.trim();
   return q ? `${SCMSCX}/search/${encodeURIComponent(q)}` : `${SCMSCX}/search`;
 }
-function unreachableNotice(err, query, onSettings) {
+function unreachableNotice(w, err, query, onSettings) {
   const box = h("div", { className: "sx-sec" }, h("header", null, "Not connected"));
   box.append(
     h("p", null, "scmscx.com could not be reached from this page."),
@@ -445,22 +509,29 @@ function unreachableNotice(err, query, onSettings) {
     h(
       "div",
       { className: "sx-row" },
-      h("button", { className: "btn sm", type: "button", onClick: () => {
+      w.button("Open scmscx.com in a new tab", { className: "sm", onClick: () => {
         window.open(siteSearchUrl(query), "_blank", "noopener");
-      } }, "Open scmscx.com in a new tab"),
-      h("button", { className: "btn sm", type: "button", onClick: onSettings }, "Settings\u2026")
+      } }),
+      w.button("Settings\u2026", { className: "sm", onClick: onSettings })
     )
   );
   return box;
 }
-async function openMap(api, client, info, status) {
+async function openMap(api, client, info, status, signal) {
   const fileName = downloadName(info);
-  status(`Downloading ${fileName} (${formatSize(info.mpqSize)})\u2026`);
-  const bytes = await client.file(info.mpqHash);
-  status(`Opening ${fileName}\u2026`);
+  const whole = info.mpqSize > 0 ? info.mpqSize : null;
+  status.progress(`Downloading ${fileName}${whole ? ` (${formatSize(whole)})` : ""}\u2026`, 0);
+  const bytes = await client.file(info.mpqHash, {
+    signal,
+    onProgress: (loaded, total) => {
+      const size = total ?? whole;
+      status.progress(`Downloading ${fileName} \u2014 ${formatSize(loaded)}${size ? ` of ${formatSize(size)}` : ""}`, size ? Math.min(1, loaded / size) : null);
+    }
+  });
+  status.busy(`Opening ${fileName}\u2026`);
   const opened = await api.document.open(bytes, fileName);
   if (!opened) {
-    status("The map was not opened.");
+    status.set("The map was not opened.");
     return false;
   }
   api.ui.status(`Opened ${fileName} from scmscx.com${describeOpened(api)}`);
@@ -475,9 +546,10 @@ function describeOpened(api) {
 }
 function openSettings(api) {
   const s = loadSettings(api);
-  const status = statusLine();
+  const w = api.ui.widgets;
+  const status = w.statusLine();
   const forwarder = h("input", { className: "input sx-grow", type: "text", placeholder: DEFAULT_FORWARDER, value: s.forwarder });
-  const report = h("div", { className: "sx-dim" });
+  const answer = h("div", { className: "sx-dim" });
   const save = () => {
     const text = forwarder.value.trim();
     if (text && !normalizeAddress(text)) {
@@ -487,23 +559,45 @@ function openSettings(api) {
     saveSettings(api, { ...s, forwarder: normalizeAddress(text) ?? "" });
     return true;
   };
+  const testBtn = w.button("Test", { className: "sm", onClick: () => {
+    void test();
+  } });
+  let testing = null;
   const test = async () => {
     const text = forwarder.value.trim();
     if (text && !normalizeAddress(text)) {
       status.set("Enter the forwarder's address with its scheme, like https://forwarder.example.com.", "error");
       return;
     }
+    testing?.abort();
+    const stop = new AbortController();
+    testing = stop;
     const client = new ScmscxClient({ bases: basesFor({ ...s, forwarder: text }) });
-    status.set("Trying\u2026");
-    clear(report);
+    testBtn.setBusy(true);
+    status.busy("Trying each address in turn\u2026");
+    status.cancel(() => {
+      stop.abort();
+    });
+    clear(answer);
+    answer.append(w.spinner({ label: "Waiting for an answer\u2026" }));
     try {
-      const { base, latest } = await client.connect();
+      const { base, latest } = await client.connect({ signal: stop.signal });
+      if (testing !== stop) return;
       status.set(base === SCMSCX ? "scmscx.com answered directly." : `scmscx.com answered through ${base}.`, "ok");
-      report.textContent = `${latest.total} maps in the archive.`;
+      clear(answer);
+      answer.textContent = `${latest.total} maps in the archive.`;
     } catch (err) {
-      status.set(problem(err), "error");
+      if (testing !== stop) return;
+      clear(answer);
+      report(status, err);
       if (err instanceof ScmscxError && err.attempts.length) {
-        report.append(h("ul", { className: "sx-attempts" }, ...err.attempts.map((a) => h("li", null, `${a.base} \u2014 ${a.reason}`))));
+        answer.append(h("ul", { className: "sx-attempts" }, ...err.attempts.map((a) => h("li", null, `${a.base} \u2014 ${a.reason}`))));
+      }
+    } finally {
+      if (testing === stop) {
+        testing = null;
+        testBtn.setBusy(false);
+        status.cancel(null);
       }
     }
   };
@@ -522,57 +616,77 @@ function openSettings(api) {
           { className: "sx-sec" },
           h("header", null, "Connection"),
           h("p", { className: "sx-dim" }, `Requests go to ${SCMSCX} first. The site's API sends no CORS header, so a page served from anywhere else cannot read its answers; a forwarder \u2014 an address that passes each request on to the site \u2014 is tried next. The plugin comes with one; put your own here to use it instead, or empty the field for none.`),
-          h("div", { className: "sx-row" }, h("label", null, "Forwarder"), forwarder, h("button", { className: "btn sm", type: "button", onClick: () => {
-            void test();
-          } }, "Test")),
-          report
+          h("div", { className: "sx-row" }, h("label", null, "Forwarder"), forwarder, testBtn),
+          answer
         ),
-        status.el
+        status
       );
       body.append(root);
     }
   });
 }
+var FIND_TITLE = "Find on scmscx.com";
+var JOB_TEXT = {
+  connect: "Connecting to scmscx.com\u2026",
+  search: "Searching scmscx.com\u2026",
+  more: "Loading more results\u2026",
+  random: "Picking a map at random\u2026",
+  map: "Loading the map\u2026"
+};
 function openFind(api) {
   const settings = loadSettings(api);
   const client = new ScmscxClient({ bases: basesFor(settings) });
-  const status = statusLine();
+  const w = api.ui.widgets;
+  const status = w.statusLine();
   let handle = null;
   let rows = [];
   let total = 0;
   let fetched = 0;
   let selected = null;
   let unreachable = null;
+  let answered = false;
   const infos = /* @__PURE__ */ new Map();
   const loading = /* @__PURE__ */ new Set();
   let busy = false;
   let seq = 0;
-  const infoFor = async (id) => {
+  const infoFor = async (id, signal) => {
     const cached = infos.get(id);
     if (cached) return cached;
-    const info = await client.mapInfo(id);
+    const info = await client.mapInfo(id, { signal });
     infos.set(id, info);
     return info;
   };
   const openSelected = async () => {
-    if (busy) return false;
+    if (busy) {
+      status.busy("Still opening the last map\u2026");
+      return false;
+    }
     if (!selected) {
       status.set("Pick a map in the list first.");
       return false;
     }
+    const row = selected;
     busy = true;
+    const stop = new AbortController();
+    status.cancel(() => {
+      stop.abort();
+    });
+    handle?.setBusy(`Opening ${row.name}\u2026`);
     try {
-      const info = await infoFor(selected.id);
-      return await openMap(api, client, info, status.set);
+      if (!infos.has(row.id)) status.busy(`Loading ${row.name}\u2026`);
+      const info = await infoFor(row.id, stop.signal);
+      return await openMap(api, client, info, status, stop.signal);
     } catch (err) {
-      status.set(problem(err), "error");
+      report(status, err);
       return false;
     } finally {
       busy = false;
+      status.cancel(null);
+      handle?.setBusy(false);
     }
   };
   handle = api.ui.dialog({
-    title: "Find on scmscx.com",
+    title: FIND_TITLE,
     size: "xl",
     tall: true,
     buttons: [
@@ -583,12 +697,12 @@ function openFind(api) {
       const root = h("div", { className: "sx" }, h("style", null, STYLE));
       body.append(root);
       const q = h("input", { className: "input sx-grow", type: "search", placeholder: "Scenario name, file name, unit or force names \u2014 or a map address from the site", value: settings.lastQuery, "aria-label": "Search" });
-      const searchBtn = h("button", { className: "btn sm", type: "button", onClick: () => {
+      const searchBtn = w.button("Search", { className: "sm", onClick: () => {
         void runSearch();
-      } }, "Search");
-      const randomBtn = h("button", { className: "btn sm", type: "button", title: "One map at random among the matches", onClick: () => {
+      } });
+      const randomBtn = w.button("Random", { className: "sm", title: "One map at random among the matches", onClick: () => {
         void pickRandom();
-      } }, "Random");
+      } });
       const select = (label, options, onChange) => h("select", { className: "select", style: "width: auto", "aria-label": label, onChange }, ...options.map(([v, text]) => h("option", { value: v }, text)));
       const sortSel = select("Sort", SORTS, () => runSearch());
       sortSel.value = settings.sort;
@@ -596,9 +710,9 @@ function openFind(api) {
       const minPlayers = h("input", { className: "input sx-num", type: "number", min: 0, max: 12, placeholder: "min", "aria-label": "Minimum human players", onChange: () => runSearch() });
       const maxPlayers = h("input", { className: "input sx-num", type: "number", min: 0, max: 12, placeholder: "max", "aria-label": "Maximum human players", onChange: () => runSearch() });
       const sizeSel = select("Minimum size", [["", "Any size"], ["64", "64 or larger"], ["96", "96 or larger"], ["128", "128 or larger"], ["192", "192 or larger"], ["256", "256"]], () => runSearch());
-      const moreBtn = h("button", { className: "btn sm", type: "button", onClick: () => {
+      const moreBtn = w.button("More\u2026", { className: "sm", onClick: () => {
         extra.style.display = extra.style.display === "none" ? "" : "none";
-      } }, "More\u2026");
+      } });
       const check = (label, checked, title) => {
         const input = h("input", { type: "checkbox", checked, onChange: () => runSearch() });
         return { input, el: h("label", { className: "sx-check", title }, input, label) };
@@ -627,13 +741,50 @@ function openFind(api) {
         incUnfinished.el
       );
       const list = h("div", { className: "sx-list", role: "listbox" });
-      const more = h("button", { className: "btn sm", type: "button", style: "display: none", onClick: () => {
+      const more = w.button("More results", { className: "sm", onClick: () => {
         void runSearch(true);
-      } }, "More results");
+      } });
+      more.style.display = "none";
       const count = h("span", { className: "sx-dim sx-grow" });
       const details = h("div", { className: "sx-details" });
       const resultsPane = h("div", { className: "sx-results" }, h("div", { className: "sx-row" }, q, searchBtn, randomBtn), filters, extra, list, h("div", { className: "sx-row" }, count, more));
-      root.append(h("div", { className: "sx-find" }, resultsPane, details), status.el);
+      root.append(h("div", { className: "sx-find" }, resultsPane, details), status);
+      let job = null;
+      let inflight = null;
+      let detail = null;
+      let cover = null;
+      const setJob = (next) => {
+        job = next;
+        if (next !== null && rows.length > 0) cover = w.busy(list, JOB_TEXT[next]);
+        else {
+          cover?.done();
+          cover = null;
+        }
+        searchBtn.setBusy(next === "search" || next === "connect");
+        searchBtn.disabled = next !== null;
+        randomBtn.setBusy(next === "random" || next === "map");
+        randomBtn.disabled = next !== null;
+        more.setBusy(next === "more");
+        more.disabled = next !== null;
+        if (rows.length === 0) renderList();
+      };
+      const begin = (next) => {
+        inflight?.abort();
+        const stop = new AbortController();
+        inflight = stop;
+        setJob(next);
+        status.busy(JOB_TEXT[next]);
+        status.cancel(() => {
+          stop.abort();
+        });
+        return stop;
+      };
+      const end = (stop) => {
+        if (inflight !== stop) return;
+        inflight = null;
+        status.cancel(null);
+        setJob(null);
+      };
       const query = (offset = 0) => {
         const minSize = sizeSel.value ? Number(sizeSel.value) : void 0;
         return {
@@ -655,16 +806,34 @@ function openFind(api) {
           includeUnfinished: incUnfinished.input.checked
         };
       };
-      const thumb = (id) => {
-        const box = h("div", { className: "sx-thumb" });
-        box.append(h("img", { src: minimapUrl(id), alt: "", loading: "lazy", onError: () => {
-          box.className = "sx-thumb none";
-          box.textContent = "no picture";
-        } }));
+      const picture = (id, className, missing) => {
+        const box = h("div", { className });
+        const thumb = className === "sx-thumb";
+        const img = h("img", thumb ? { src: minimapUrl(id), alt: "", loading: "lazy" } : { className: "sx-big", src: minimapUrl(id), alt: "" });
+        const placeholder = w.skeleton({ block: true, height: thumb ? 44 : 110 });
+        img.hidden = true;
+        img.addEventListener("load", () => {
+          placeholder.remove();
+          img.hidden = false;
+        });
+        img.addEventListener("error", () => {
+          box.className = `${className} none`;
+          box.textContent = missing;
+        });
+        box.append(placeholder, img);
         return box;
       };
       const renderList = () => {
         clear(list);
+        if (rows.length === 0) {
+          if (unreachable) return;
+          if (job) {
+            list.append(...ghostRows(w));
+            return;
+          }
+          list.append(h("div", { className: "sx-faint", style: "padding: 8px" }, answered ? "Nothing found." : "Nothing loaded yet."));
+          return;
+        }
         for (const row of rows) {
           const el = h(
             "div",
@@ -675,7 +844,7 @@ function openFind(api) {
                 if (ok) handle?.close();
               });
             } },
-            thumb(row.id),
+            picture(row.id, "sx-thumb", "no picture"),
             h(
               "div",
               { className: "sx-item-text" },
@@ -685,12 +854,11 @@ function openFind(api) {
           );
           list.append(el);
         }
-        if (rows.length === 0 && !unreachable) list.append(h("div", { className: "sx-faint", style: "padding: 8px" }, "Nothing found."));
       };
       const renderDetails = () => {
         clear(details);
         if (unreachable) {
-          details.append(unreachableNotice(unreachable, q.value, () => openSettings(api)));
+          details.append(unreachableNotice(w, unreachable, q.value, () => openSettings(api)));
           return;
         }
         if (!selected) {
@@ -700,11 +868,10 @@ function openFind(api) {
         const row = selected;
         const info = infos.get(row.id);
         details.append(h("h3", null, info?.name || row.name));
-        details.append(h("img", { className: "sx-big", src: minimapUrl(row.id), alt: "", onError: (e) => {
-          e.target.remove();
-        } }));
+        details.append(picture(row.id, "sx-bigframe", "no minimap"));
         if (!info) {
-          details.append(h("p", { className: "sx-dim" }, loading.has(row.id) ? "Loading the details\u2026" : "The details could not be loaded."));
+          if (loading.has(row.id)) details.append(w.spinner({ label: "Loading the details\u2026" }), ghostDetails(w));
+          else details.append(h("p", { className: "sx-dim" }, "The details could not be loaded."));
           details.append(h("p", null, link(row.url, "Its page on scmscx.com")));
           return;
         }
@@ -730,20 +897,25 @@ function openFind(api) {
       };
       const pick = async (row) => {
         selected = row;
+        const fetch2 = !infos.has(row.id) && !loading.has(row.id);
+        if (fetch2) loading.add(row.id);
         renderList();
         renderDetails();
-        if (infos.has(row.id) || loading.has(row.id)) return;
-        loading.add(row.id);
+        if (!fetch2) return;
+        detail?.abort();
+        const stop = new AbortController();
+        detail = stop;
         try {
-          await infoFor(row.id);
+          await infoFor(row.id, stop.signal);
         } catch (err) {
-          if (selected?.id === row.id) status.set(problem(err), "error");
+          if (!wasAborted(err) && selected?.id === row.id) status.set(problem(err), "error");
         } finally {
           loading.delete(row.id);
           if (selected?.id === row.id) renderDetails();
         }
       };
       const show = (found, append, label) => {
+        answered = true;
         rows = append ? [...rows, ...found.rows.filter((r) => !rows.some((have) => have.id === r.id))] : found.rows;
         total = found.total;
         fetched = append ? fetched + found.fetched : found.fetched;
@@ -754,11 +926,12 @@ function openFind(api) {
         renderDetails();
       };
       const showOne = async (id, mine2, label) => {
-        status.set("Loading the map\u2026");
+        const stop = begin("map");
         try {
-          const info = await infoFor(id);
+          const info = await infoFor(id, stop.signal);
           if (mine2 !== seq) return;
           const row = { id, name: info.name || downloadName(info), fileNames: info.fileNames.map((f) => f.name), lastModified: info.fileNames[0]?.modified ?? null, uploaded: info.uploaded, url: info.url };
+          end(stop);
           show({ rows: [row], total: 1, fetched: 1 }, false, label);
           selected = row;
           renderList();
@@ -766,45 +939,57 @@ function openFind(api) {
           status.set("");
         } catch (err) {
           if (mine2 !== seq) return;
-          status.set(problem(err), "error");
+          end(stop);
+          report(status, err);
+        } finally {
+          end(stop);
         }
       };
       const runSearch = async (append = false) => {
         if (unreachable) return;
         const mine2 = ++seq;
+        window.clearTimeout(timer);
         saveSettings(api, { ...loadSettings(api), lastQuery: q.value, sort: sortSel.value });
         const ref = parseMapRef(q.value);
         if (ref && !append) {
           await showOne(ref, mine2, "1 map, by address");
           return;
         }
-        status.set(append ? "Loading more\u2026" : "Searching scmscx.com\u2026");
+        const stop = begin(append ? "more" : "search");
         try {
-          const found = await client.search(query(append ? fetched : 0));
+          const found = await client.search(query(append ? fetched : 0), { signal: stop.signal });
           if (mine2 !== seq) return;
+          end(stop);
           show(found, append);
           status.set("");
         } catch (err) {
           if (mine2 !== seq) return;
-          status.set(problem(err), "error");
+          end(stop);
+          report(status, err);
+        } finally {
+          end(stop);
         }
       };
       const pickRandom = async () => {
         if (unreachable) return;
         const mine2 = ++seq;
-        status.set("Picking a map at random\u2026");
+        const stop = begin("random");
         try {
-          const id = await client.random(query());
+          const id = await client.random(query(), { signal: stop.signal });
           if (mine2 !== seq) return;
           await showOne(id, mine2, "1 map, at random");
         } catch (err) {
           if (mine2 !== seq) return;
-          status.set(problem(err), "error");
+          end(stop);
+          report(status, err);
+        } finally {
+          end(stop);
         }
       };
       let timer = 0;
       q.addEventListener("input", () => {
         window.clearTimeout(timer);
+        if (!unreachable) status.busy(JOB_TEXT.search);
         timer = window.setTimeout(() => {
           void runSearch();
         }, 350);
@@ -817,10 +1002,11 @@ function openFind(api) {
         }
       });
       const mine = ++seq;
-      status.set("Connecting to scmscx.com\u2026");
+      const first = begin("connect");
       renderDetails();
-      void client.connect().then(({ latest }) => {
+      void client.connect({ signal: first.signal }).then(({ latest }) => {
         if (mine !== seq) return;
+        end(first);
         status.set("");
         if (q.value.trim()) {
           void runSearch();
@@ -829,6 +1015,11 @@ function openFind(api) {
         show(latest, false, `${latest.total} maps, newest uploads first`);
       }).catch((err) => {
         if (mine !== seq) return;
+        end(first);
+        if (wasAborted(err)) {
+          status.set("Stopped.");
+          return;
+        }
         unreachable = err instanceof ScmscxError ? err : new ScmscxError("unreachable", problem(err));
         status.set(problem(err), "error");
         count.textContent = "";
@@ -839,6 +1030,9 @@ function openFind(api) {
       return () => {
         window.clearTimeout(timer);
         seq++;
+        inflight?.abort();
+        detail?.abort();
+        cover?.done();
       };
     }
   });

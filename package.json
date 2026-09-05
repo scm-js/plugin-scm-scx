@@ -1,6 +1,6 @@
 {
   "name": "scmjs-plugin-scm-scx",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "private": true,
   "description": "scmscx.com — a plugin for the scmJS StarCraft map editor that searches scmscx.com and opens maps from it.",
   "author": "Jeany",

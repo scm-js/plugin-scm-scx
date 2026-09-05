@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapInfoFrom, mergeRows, randomPath, ScmscxClient, ScmscxError, searchPath, SCMSCX, minimapUrl, mapPageUrl, type Fetch, type RawInfo } from "../client";
+import { mapInfoFrom, mergeRows, randomPath, ScmscxClient, ScmscxError, searchPath, SCMSCX, minimapUrl, mapPageUrl, wasAborted, type Fetch, type RawInfo } from "../client";
 
 interface Call { url: string; init: RequestInit }
 
@@ -161,6 +161,45 @@ describe("ScmscxClient", () => {
     expect([...bytes]).toEqual([0x4d, 0x50, 0x51, 0x1a]);
     expect(calls[1].url).toBe("https://scmscx.com/api/maps/eaa6");
     expect(new Headers(calls[1].init.headers).get("accept")).toBe("application/octet-stream");
+  });
+
+  it("reports a download as it arrives, with the total the answer names", async () => {
+    const body = new Uint8Array([0x4d, 0x50, 0x51, 0x1a, 1, 2, 3, 4]);
+    const { fetch } = fakeFetch([json(LATEST), () => new Response(body, { status: 200, headers: { "content-length": "8" } })]);
+    const client = new ScmscxClient({ bases: [SCMSCX], fetch });
+    const seen: [number, number | null][] = [];
+    const bytes = await client.file("eaa6", { onProgress: (loaded, total) => seen.push([loaded, total]) });
+    expect([...bytes]).toEqual([...body]);
+    expect(seen[0]).toEqual([0, 8]);
+    expect(seen.at(-1)).toEqual([8, 8]);
+  });
+
+  it("reports a download whose size the answer never named", async () => {
+    const { fetch } = fakeFetch([json(LATEST), () => new Response(new Uint8Array([1, 2]), { status: 200 })]);
+    const client = new ScmscxClient({ bases: [SCMSCX], fetch });
+    const seen: [number, number | null][] = [];
+    await client.file("eaa6", { onProgress: (loaded, total) => seen.push([loaded, total]) });
+    expect(seen.every(([, total]) => total === null)).toBe(true);
+    expect(seen.at(-1)?.[0]).toBe(2);
+  });
+
+  it("turns a caller's give-up into `aborted` and tries no further base", async () => {
+    const calls: string[] = [];
+    const fetch: Fetch = async (url) => {
+      calls.push(url);
+      throw Object.assign(new Error("The operation was aborted."), { name: "AbortError" });
+    };
+    const client = new ScmscxClient({ bases: ["https://a.example", "https://b.example"], fetch });
+    const err = await client.connect({ signal: new AbortController().signal }).catch((e) => e);
+    expect(wasAborted(err)).toBe(true);
+    expect(err).toMatchObject({ code: "aborted", sentence: "Stopped." });
+    expect(calls).toEqual(["https://a.example/api/uiv2/search?sort=timeuploadednew"]);
+  });
+
+  it("hands a give-up on any other route back as `aborted` too", async () => {
+    const { fetch } = fakeFetch([json(LATEST), () => Promise.reject(Object.assign(new Error("aborted"), { name: "AbortError" }))]);
+    const client = new ScmscxClient({ bases: [SCMSCX], fetch });
+    await expect(client.search({ query: "x" })).rejects.toMatchObject({ code: "aborted" });
   });
 
   it("rejects an answer that is not JSON once connected", async () => {

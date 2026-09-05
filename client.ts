@@ -129,7 +129,7 @@ export interface MapInfo {
   url: string;
 }
 
-export type ErrorCode = "unreachable" | "network" | "not_found" | "http" | "bad_response";
+export type ErrorCode = "unreachable" | "network" | "not_found" | "http" | "bad_response" | "aborted";
 
 export interface Attempt {
   base: string;
@@ -159,6 +159,8 @@ export class ScmscxError extends Error {
         return `scmscx.com did not answer: ${this.message}`;
       case "not_found":
         return "scmscx.com has no such map.";
+      case "aborted":
+        return "Stopped.";
       case "bad_response":
         return this.message;
       default:
@@ -167,12 +169,28 @@ export class ScmscxError extends Error {
   }
 }
 
+/** True for anything an `AbortSignal` stopped, however it reached us. */
+export function wasAborted(err: unknown): boolean {
+  if (err instanceof ScmscxError) return err.code === "aborted";
+  return !!err && typeof err === "object" && (err as { name?: string }).name === "AbortError";
+}
+
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 export interface ClientOptions {
   /** Where to send requests, tried in order until one answers; each without a trailing slash. */
   bases: readonly string[];
   fetch?: Fetch;
+}
+
+/** Every request takes one, so a dialog can drop an answer it no longer wants. */
+export interface RequestOptions {
+  signal?: AbortSignal;
+}
+
+export interface DownloadOptions extends RequestOptions {
+  /** Bytes so far, and how many in all when the answer said — so a caller can draw a bar. */
+  onProgress?: (loaded: number, total: number | null) => void;
 }
 
 const DEFAULT_MAX_SIZE = 256;
@@ -314,6 +332,9 @@ export function mapInfoFrom(id: string, raw: RawInfo, names: RawFileName[] | nul
   };
 }
 
+/** What every route throws once the caller's signal has fired. */
+const stopped = () => new ScmscxError("aborted", "The request was stopped.");
+
 export class ScmscxClient {
   readonly bases: readonly string[];
   private active: string | null = null;
@@ -335,13 +356,15 @@ export class ScmscxClient {
    * and hand back what it answered: the newest uploads. Throws `unreachable` with one
    * reason per base when none does.
    */
-  async connect(): Promise<{ base: string; latest: SearchResult }> {
+  async connect(opts: RequestOptions = {}): Promise<{ base: string; latest: SearchResult }> {
     const attempts: Attempt[] = [];
     for (const base of this.bases) {
       let res: Response;
       try {
-        res = await this.fetchImpl(`${base}${searchPath({ sort: "timeuploadednew" })}`, { headers: { accept: "application/json" } });
+        res = await this.fetchImpl(`${base}${searchPath({ sort: "timeuploadednew" })}`, { headers: { accept: "application/json" }, signal: opts.signal });
       } catch (err) {
+        // A caller that gave up wants no further bases tried, and no "unreachable".
+        if (wasAborted(err)) throw stopped();
         attempts.push({ base, reason: err instanceof Error ? err.message : String(err) });
         continue;
       }
@@ -352,7 +375,8 @@ export class ScmscxClient {
       let body: unknown;
       try {
         body = JSON.parse(await res.text());
-      } catch {
+      } catch (err) {
+        if (wasAborted(err)) throw stopped();
         attempts.push({ base, reason: "answered with something that is not the search API" });
         continue;
       }
@@ -366,48 +390,83 @@ export class ScmscxClient {
     throw new ScmscxError("unreachable", attempts.map((a) => `${a.base}: ${a.reason}`).join("; "), 0, attempts);
   }
 
-  async search(q: SearchQuery): Promise<SearchResult> {
-    const body = await this.json(searchPath(q));
+  async search(q: SearchQuery, opts: RequestOptions = {}): Promise<SearchResult> {
+    const body = await this.json(searchPath(q), opts.signal);
     if (!isSearchBody(body)) throw new ScmscxError("bad_response", "scmscx.com answered the search with something unexpected.");
     return resultFrom(body);
   }
 
   /** One random map id among the query's matches. */
-  async random(q: SearchQuery): Promise<string> {
-    const body = await this.json(randomPath(q));
+  async random(q: SearchQuery, opts: RequestOptions = {}): Promise<string> {
+    const body = await this.json(randomPath(q), opts.signal);
     if (typeof body !== "string" || !body) throw new ScmscxError("bad_response", "scmscx.com answered the random pick with something unexpected.");
     return body;
   }
 
   /** A map's details, with the file names the site knows it under (best effort). */
-  async mapInfo(id: string): Promise<MapInfo> {
-    const raw = (await this.json(`/api/uiv2/map_info/${encodeURIComponent(id)}`)) as RawInfo;
+  async mapInfo(id: string, opts: RequestOptions = {}): Promise<MapInfo> {
+    const raw = (await this.json(`/api/uiv2/map_info/${encodeURIComponent(id)}`, opts.signal)) as RawInfo;
     if (!raw || typeof raw !== "object" || !raw.meta?.mpq_hash) throw new ScmscxError("bad_response", "scmscx.com answered without the map's file hash.");
     let names: RawFileName[] | null = null;
     try {
-      const got = await this.json(`/api/uiv2/filenames2/${encodeURIComponent(id)}`);
+      const got = await this.json(`/api/uiv2/filenames2/${encodeURIComponent(id)}`, opts.signal);
       names = Array.isArray(got) ? (got as RawFileName[]) : null;
-    } catch {
+    } catch (err) {
+      if (wasAborted(err)) throw stopped();
       names = null;
     }
     return mapInfoFrom(id, raw, names);
   }
 
-  /** The map file — the archive as uploaded — by its MPQ hash. */
-  async file(mpqHash: string): Promise<Uint8Array> {
-    const res = await this.request(`/api/maps/${encodeURIComponent(mpqHash)}`, "application/octet-stream");
-    return new Uint8Array(await res.arrayBuffer());
+  /**
+   * The map file — the archive as uploaded — by its MPQ hash. With `onProgress` the body
+   * is read chunk by chunk so the caller can draw a bar; `content-length` gives the total
+   * where the answer carries one, and null where it does not.
+   */
+  async file(mpqHash: string, opts: DownloadOptions = {}): Promise<Uint8Array> {
+    const res = await this.request(`/api/maps/${encodeURIComponent(mpqHash)}`, "application/octet-stream", opts.signal);
+    const header = res.headers.get("content-length");
+    const total = header && /^\d+$/.test(header) ? Number(header) : null;
+    const reader = opts.onProgress ? res.body?.getReader?.() : undefined;
+    if (!opts.onProgress || !reader) {
+      const bytes = new Uint8Array(await this.body(res, opts.signal));
+      opts.onProgress?.(bytes.length, total ?? bytes.length);
+      return bytes;
+    }
+    const chunks: Uint8Array[] = [];
+    let loaded = 0;
+    opts.onProgress(0, total);
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        chunks.push(value);
+        loaded += value.length;
+        opts.onProgress(loaded, total);
+      }
+    } catch (err) {
+      if (wasAborted(err)) throw stopped();
+      throw new ScmscxError("network", err instanceof Error ? err.message : String(err));
+    }
+    const out = new Uint8Array(loaded);
+    let at = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, at);
+      at += chunk.length;
+    }
+    return out;
   }
 
   /* ── plumbing ── */
 
-  private async ensure(): Promise<string> {
-    return this.active ?? (await this.connect()).base;
+  private async ensure(signal?: AbortSignal): Promise<string> {
+    return this.active ?? (await this.connect({ signal })).base;
   }
 
-  private async json(path: string): Promise<unknown> {
-    const res = await this.request(path, "application/json");
-    const text = await res.text();
+  private async json(path: string, signal?: AbortSignal): Promise<unknown> {
+    const res = await this.request(path, "application/json", signal);
+    const text = new TextDecoder().decode(await this.body(res, signal));
     try {
       return JSON.parse(text);
     } catch {
@@ -415,12 +474,23 @@ export class ScmscxClient {
     }
   }
 
-  private async request(path: string, accept: string): Promise<Response> {
-    const base = await this.ensure();
+  /** Read a body, turning a give-up into `aborted` and anything else into `network`. */
+  private async body(res: Response, signal?: AbortSignal): Promise<ArrayBuffer> {
+    try {
+      return await res.arrayBuffer();
+    } catch (err) {
+      if (wasAborted(err) || signal?.aborted) throw stopped();
+      throw new ScmscxError("network", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async request(path: string, accept: string, signal?: AbortSignal): Promise<Response> {
+    const base = await this.ensure(signal);
     let res: Response;
     try {
-      res = await this.fetchImpl(`${base}${path}`, { headers: { accept } });
+      res = await this.fetchImpl(`${base}${path}`, { headers: { accept }, signal });
     } catch (err) {
+      if (wasAborted(err)) throw stopped();
       throw new ScmscxError("network", err instanceof Error ? err.message : String(err));
     }
     if (res.ok) return res;
