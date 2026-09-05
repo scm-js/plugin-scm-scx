@@ -27,10 +27,13 @@
  * bottom (the download's bar and its Cancel live there), the ring inside the button that
  * started a request, the cover over a list being replaced, and the grey rows and pictures
  * standing in for answers on their way — so the dialog waits the way the editor's own do.
+ * The results list is kept between answers: a row is one element per map, moved and
+ * relabelled when the next answer lists it again, so a search landing mid-word, a click
+ * on a row or More results never build every row — and fetch every minimap — afresh.
  * `@scm-js/plugin-api` is the editor's type declarations, a devDependency generated from
  * its own `src/plugins/api.ts`; the host erases the type-only import.
  */
-import type { BusyHandle, DialogHandle, PluginApi, StatusLineElement, WidgetsApi } from "@scm-js/plugin-api";
+import type { DialogHandle, PluginApi, StatusLineElement, WidgetsApi } from "@scm-js/plugin-api";
 import { minimapUrl, ScmscxClient, ScmscxError, SCMSCX, SORTS, TILESETS, wasAborted, type MapInfo, type SearchQuery, type SearchRow, type Sort, type TilesetKey } from "./client";
 import { downloadName, eudLabel, formatDate, formatSize, normalizeAddress, objectsLabel, parseMapRef, playersLabel, TILESET_NAMES, tilesetName, triggersLabel, versionName } from "./format";
 
@@ -73,8 +76,10 @@ const STYLE = `
 .sx .sx-num { width: 58px; }
 .sx .sx-find { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; min-height: 0; flex: 1; }
 .sx .sx-results { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.sx .sx-list-box { flex: 1; min-height: 0; }
 .sx .sx-list { flex: 1; min-height: 160px; overflow: auto; border: 1px solid var(--border, #333); background: var(--bg-0, #111); padding: 3px; display: flex; flex-direction: column; gap: 2px; }
-.sx .sx-item { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; align-items: center; padding: 4px 6px; border-radius: 3px; cursor: pointer; }
+.sx .sx-item { flex: 0 0 auto; display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; align-items: center; padding: 4px 6px; border-radius: 3px; cursor: pointer; }
+.sx .sx-item.no-thumb { grid-template-columns: minmax(0, 1fr); padding: 6px 8px; }
 .sx .sx-item:hover { background: var(--bg-2, #1b1f27); }
 .sx .sx-item.on { background: var(--sel, #2b4f80); color: #fff; }
 .sx .sx-item.on .sx-dim, .sx .sx-item.on .sx-faint { color: rgba(255,255,255,.75); }
@@ -104,9 +109,21 @@ const STYLE = `
 
 /* ── Settings ───────────────────────────────────────────── */
 
+/** Which minimaps the search dialog asks the site for: each is one request to scmscx.com. */
+type Minimaps = "all" | "details" | "none";
+
+const MINIMAP_CHOICES: readonly (readonly [Minimaps, string])[] = [
+  ["all", "Beside each result and in the details"],
+  ["details", "In the details only"],
+  ["none", "None"],
+];
+
 interface Settings {
   /** An address that forwards requests to scmscx.com, tried after the site itself. Blank for none. */
   forwarder: string;
+  minimaps: Minimaps;
+  /** Search after each pause in typing; off, only Enter and the Search button search. */
+  searchAsYouType: boolean;
   lastQuery: string;
   sort: Sort;
 }
@@ -118,7 +135,7 @@ interface Settings {
  */
 const DEFAULT_FORWARDER = "https://scm-scx-forwarder.scmjs.dev";
 
-const DEFAULT_SETTINGS: Settings = { forwarder: DEFAULT_FORWARDER, lastQuery: "", sort: "relevancy" };
+const DEFAULT_SETTINGS: Settings = { forwarder: DEFAULT_FORWARDER, minimaps: "all", searchAsYouType: true, lastQuery: "", sort: "relevancy" };
 
 function loadSettings(api: PluginApi): Settings {
   return { ...DEFAULT_SETTINGS, ...api.storage.get<Partial<Settings>>("settings", {}) };
@@ -143,11 +160,11 @@ function report(status: StatusLineElement, err: unknown) {
 }
 
 /** Rows standing in for results that have not arrived, in the shape they will take. */
-function ghostRows(w: WidgetsApi, count = 8): HTMLElement[] {
+function ghostRows(w: WidgetsApi, thumbs: boolean, count = 8): HTMLElement[] {
   const widths = [78, 56, 88, 64, 72, 49, 83, 61];
   return Array.from({ length: count }, (_, i) =>
-    h("div", { className: "sx-item sx-ghost", "aria-hidden": "true" },
-      h("div", { className: "sx-thumb" }, w.skeleton({ block: true, height: 44 })),
+    h("div", { className: `sx-item sx-ghost${thumbs ? "" : " no-thumb"}`, "aria-hidden": "true" },
+      thumbs && h("div", { className: "sx-thumb" }, w.skeleton({ block: true, height: 44 })),
       h("div", { className: "sx-item-text" }, w.skeleton({ width: `${widths[i % widths.length]}%` }), w.skeleton({ width: `${Math.max(24, widths[(i + 3) % widths.length] - 26)}%` })),
     ),
   );
@@ -230,11 +247,14 @@ function openSettings(api: PluginApi) {
   const status = w.statusLine();
   const forwarder = h("input", { className: "input sx-grow", type: "text", placeholder: DEFAULT_FORWARDER, value: s.forwarder });
   const answer = h("div", { className: "sx-dim" });
+  const minimaps = h("select", { className: "select", style: "width: auto", "aria-label": "Minimaps" }, ...MINIMAP_CHOICES.map(([v, text]) => h("option", { value: v }, text)));
+  minimaps.value = s.minimaps;
+  const asYouType = w.checkbox("Search as you type", { value: s.searchAsYouType });
 
   const save = () => {
     const text = forwarder.value.trim();
     if (text && !normalizeAddress(text)) { status.set("Enter the forwarder's address with its scheme, like https://forwarder.example.com.", "error"); return false; }
-    saveSettings(api, { ...s, forwarder: normalizeAddress(text) ?? "" });
+    saveSettings(api, { ...s, forwarder: normalizeAddress(text) ?? "", minimaps: minimaps.value as Minimaps, searchAsYouType: asYouType.input.checked });
     return true;
   };
 
@@ -291,6 +311,12 @@ function openSettings(api: PluginApi) {
           h("div", { className: "sx-row" }, h("label", null, "Forwarder"), forwarder, testBtn),
           answer,
         ),
+        h("div", { className: "sx-sec" },
+          h("header", null, "Requests"),
+          h("p", { className: "sx-dim" }, "Searching as you type sends a search at each pause; off, only Enter and the Search button do. Every minimap is one more request to scmscx.com: one for each result that scrolls into view, and one for the map whose details are shown. Both take effect when the search dialog is next opened."),
+          h("div", { className: "sx-row" }, h("label", null, "Search"), asYouType),
+          h("div", { className: "sx-row" }, h("label", null, "Minimaps"), minimaps),
+        ),
         status,
       );
       body.append(root);
@@ -317,6 +343,10 @@ const JOB_TEXT: Record<Job, string> = {
 function openFind(api: PluginApi) {
   const settings = loadSettings(api);
   const client = new ScmscxClient({ bases: basesFor(settings) });
+  // Which minimaps to ask for, read once for the dialog's life: a row keeps its picture, so
+  // a change made from the notice's Settings button reaches the next search dialog.
+  const thumbs = settings.minimaps === "all";
+  const bigPics = settings.minimaps !== "none";
   const w = api.ui.widgets;
   const status = w.statusLine();
   let handle: DialogHandle | null = null;
@@ -410,26 +440,37 @@ function openFind(api: PluginApi) {
 
       /* Lists and details */
       const list = h("div", { className: "sx-list", role: "listbox" });
+      /* The cover over the rows while a different list is on its way — the kit's own classes,
+         kept and shown rather than made for each job: `w.busy` wraps its target in a box and
+         unwraps it on `done`, and a scrolling list taken out of the document and put back
+         has lost its place, so More results would have jumped to the top every time. */
+      const coverNote = h("span", null);
+      const cover = h("div", { className: "busy-cover", "aria-hidden": "true" }, h("div", { className: "busy-note" }, h("span", { className: "spinner sm" }), coverNote));
+      cover.hidden = true;
+      const listBox = h("div", { className: "busy-box sx-list-box" }, list, cover);
+      const setCover = (text: string | null) => {
+        cover.hidden = text === null;
+        if (text !== null) coverNote.textContent = text;
+        list.classList.toggle("is-busy", text !== null);
+        list.setAttribute("aria-busy", text !== null ? "true" : "false");
+      };
       const more = w.button("More results", { className: "sm", onClick: () => { void runSearch(true); } });
       more.style.display = "none";
       const count = h("span", { className: "sx-dim sx-grow" });
       const details = h("div", { className: "sx-details" });
-      const resultsPane = h("div", { className: "sx-results" }, h("div", { className: "sx-row" }, q, searchBtn, randomBtn), filters, extra, list, h("div", { className: "sx-row" }, count, more));
+      const resultsPane = h("div", { className: "sx-results" }, h("div", { className: "sx-row" }, q, searchBtn, randomBtn), filters, extra, listBox, h("div", { className: "sx-row" }, count, more));
       root.append(h("div", { className: "sx-find" }, resultsPane, details), status);
 
       /* What is in flight on the results side: one request at a time, each cancellable. */
       let job: Job | null = null;
       let inflight: AbortController | null = null;
       let detail: AbortController | null = null;
-      /** The cover over the rows while a different list is on its way. */
-      let cover: BusyHandle | null = null;
 
       /** Show the whole results side as waiting, and say on what: the button that started it, and the list. */
       const setJob = (next: Job | null) => {
         job = next;
         // Rows already listed are dimmed under a note; an empty list shows the ghost rows instead.
-        if (next !== null && rows.length > 0) cover = w.busy(list, JOB_TEXT[next]);
-        else { cover?.done(); cover = null; }
+        setCover(next !== null && rows.length > 0 ? JOB_TEXT[next] : null);
         searchBtn.setBusy(next === "search" || next === "connect");
         searchBtn.disabled = next !== null;
         randomBtn.setBusy(next === "random" || next === "map");
@@ -501,24 +542,65 @@ function openFind(api: PluginApi) {
         return box;
       };
 
+      /* One element per map id, kept across renders: a render moves the rows into the order
+         the answer lists them and relabels the ones whose text moved, and only a map not yet
+         listed gets a row — and a minimap request — made for it. */
+      interface RowEl { el: HTMLElement; name: HTMLElement; sub: HTMLElement; row: SearchRow }
+      const rowEls = new Map<string, RowEl>();
+      const rowFor = (row: SearchRow): HTMLElement => {
+        const subText = [row.fileNames.join(", "), formatDate(row.lastModified)].filter(Boolean).join(" · ");
+        let r = rowEls.get(row.id);
+        if (!r) {
+          const name = h("b", { className: "sx-item-name" }, row.name);
+          const sub = h("div", { className: "sx-dim sx-item-sub" }, subText);
+          const el = h("div", { className: `sx-item${thumbs ? "" : " no-thumb"}`, role: "option", onClick: () => { void pick(r!.row); }, onDblClick: () => { void openSelected().then((ok) => { if (ok) handle?.close(); }); } },
+            thumbs && picture(row.id, "sx-thumb", "no picture"),
+            h("div", { className: "sx-item-text" }, name, sub),
+          );
+          r = { el, name, sub, row };
+          rowEls.set(row.id, r);
+        } else {
+          r.row = row;
+          if (r.name.textContent !== row.name) r.name.textContent = row.name;
+          if (r.sub.textContent !== subText) r.sub.textContent = subText;
+        }
+        return r.el;
+      };
+
+      /** The selection is a class on its row: nothing else in the list changes for it. */
+      const markSelected = () => {
+        for (const [id, r] of rowEls) {
+          const on = selected?.id === id;
+          r.el.classList.toggle("on", on);
+          if (on) r.el.setAttribute("aria-selected", "true");
+          else r.el.removeAttribute("aria-selected");
+        }
+      };
+
       const renderList = () => {
-        clear(list);
         if (rows.length === 0) {
+          rowEls.clear();
+          clear(list);
           if (unreachable) return;
-          if (job) { list.append(...ghostRows(w)); return; }
+          if (job) { list.append(...ghostRows(w, thumbs)); return; }
           list.append(h("div", { className: "sx-faint", style: "padding: 8px" }, answered ? "Nothing found." : "Nothing loaded yet."));
           return;
         }
-        for (const row of rows) {
-          const el = h("div", { className: `sx-item${selected?.id === row.id ? " on" : ""}`, role: "option", onClick: () => { void pick(row); }, onDblClick: () => { void openSelected().then((ok) => { if (ok) handle?.close(); }); } },
-            picture(row.id, "sx-thumb", "no picture"),
-            h("div", { className: "sx-item-text" },
-              h("b", { className: "sx-item-name" }, row.name),
-              h("div", { className: "sx-dim sx-item-sub" }, [row.fileNames.join(", "), formatDate(row.lastModified)].filter(Boolean).join(" · ")),
-            ),
-          );
-          list.append(el);
-        }
+        const listed = new Set(rows.map((r) => r.id));
+        for (const id of [...rowEls.keys()]) if (!listed.has(id)) rowEls.delete(id);
+        // Put each row where the answer has it, touching only the ones out of place; what is
+        // left past the end — ghost rows, maps no longer listed — goes.
+        const want = rows.map(rowFor);
+        want.forEach((el, i) => { if (list.children[i] !== el) list.insertBefore(el, list.children[i] ?? null); });
+        while (list.children.length > want.length) list.lastElementChild?.remove();
+        markSelected();
+      };
+
+      /** The details pane's minimap, kept while the same map stays selected. */
+      let bigPic: { id: string; el: HTMLElement } | null = null;
+      const bigPicture = (id: string): HTMLElement => {
+        if (bigPic?.id !== id) bigPic = { id, el: picture(id, "sx-bigframe", "no minimap") };
+        return bigPic.el;
       };
 
       const renderDetails = () => {
@@ -528,7 +610,7 @@ function openFind(api: PluginApi) {
         const row = selected;
         const info = infos.get(row.id);
         details.append(h("h3", null, info?.name || row.name));
-        details.append(picture(row.id, "sx-bigframe", "no minimap"));
+        if (bigPics) details.append(bigPicture(row.id));
         if (!info) {
           if (loading.has(row.id)) details.append(w.spinner({ label: "Loading the details…" }), ghostDetails(w));
           else details.append(h("p", { className: "sx-dim" }, "The details could not be loaded."));
@@ -560,7 +642,7 @@ function openFind(api: PluginApi) {
         // missing while they are still on their way.
         const fetch = !infos.has(row.id) && !loading.has(row.id);
         if (fetch) loading.add(row.id);
-        renderList();
+        markSelected();
         renderDetails();
         if (!fetch) return;
         detail?.abort();
@@ -598,7 +680,7 @@ function openFind(api: PluginApi) {
           end(stop);
           show({ rows: [row], total: 1, fetched: 1 }, false, label);
           selected = row;
-          renderList();
+          markSelected();
           renderDetails();
           status.set("");
         } catch (err) {
@@ -653,6 +735,7 @@ function openFind(api: PluginApi) {
       let timer = 0;
       q.addEventListener("input", () => {
         window.clearTimeout(timer);
+        if (!settings.searchAsYouType) return;
         // Say straight away that the typing was heard; the search itself waits for a pause.
         if (!unreachable) status.busy(JOB_TEXT.search);
         timer = window.setTimeout(() => { void runSearch(); }, 350);
@@ -680,7 +763,7 @@ function openFind(api: PluginApi) {
         renderDetails();
       });
       setTimeout(() => q.focus(), 0);
-      return () => { window.clearTimeout(timer); seq++; inflight?.abort(); detail?.abort(); cover?.done(); };
+      return () => { window.clearTimeout(timer); seq++; inflight?.abort(); detail?.abort(); };
     },
   });
 }

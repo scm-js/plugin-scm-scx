@@ -30,7 +30,11 @@ and press **Add**. It is in that list by default. To pin a version, add a ref:
   forces. **Open** downloads it and opens it in the editor (a modified map goes through
   the usual Close Scenario question first). **Random** picks one map among the matches.
   Pasting a map address from the site (`https://scmscx.com/map/…`) shows that map.
-- **Plugins ▸ scmscx.com Settings…**. The forwarder address, and a test.
+- **Plugins ▸ scmscx.com Settings…**. The forwarder address, and a test; whether typing
+  searches at each pause or only Enter and the Search button do; and which minimaps the
+  search shows — beside each result and in the details, in the details only, or none.
+  Every search and every minimap is one request to the site, so both settings are ways to
+  send fewer.
 
 ## Reaching the site
 

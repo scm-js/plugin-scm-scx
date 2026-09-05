@@ -432,8 +432,10 @@ var STYLE = `
 .sx .sx-num { width: 58px; }
 .sx .sx-find { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; min-height: 0; flex: 1; }
 .sx .sx-results { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.sx .sx-list-box { flex: 1; min-height: 0; }
 .sx .sx-list { flex: 1; min-height: 160px; overflow: auto; border: 1px solid var(--border, #333); background: var(--bg-0, #111); padding: 3px; display: flex; flex-direction: column; gap: 2px; }
-.sx .sx-item { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; align-items: center; padding: 4px 6px; border-radius: 3px; cursor: pointer; }
+.sx .sx-item { flex: 0 0 auto; display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; align-items: center; padding: 4px 6px; border-radius: 3px; cursor: pointer; }
+.sx .sx-item.no-thumb { grid-template-columns: minmax(0, 1fr); padding: 6px 8px; }
 .sx .sx-item:hover { background: var(--bg-2, #1b1f27); }
 .sx .sx-item.on { background: var(--sel, #2b4f80); color: #fff; }
 .sx .sx-item.on .sx-dim, .sx .sx-item.on .sx-faint { color: rgba(255,255,255,.75); }
@@ -460,8 +462,13 @@ var STYLE = `
 .sx .sx-attempts { margin: 0; padding-left: 16px; }
 .sx .sx-ghost { cursor: default; }
 `;
+var MINIMAP_CHOICES = [
+  ["all", "Beside each result and in the details"],
+  ["details", "In the details only"],
+  ["none", "None"]
+];
 var DEFAULT_FORWARDER = "https://scm-scx-forwarder.scmjs.dev";
-var DEFAULT_SETTINGS = { forwarder: DEFAULT_FORWARDER, lastQuery: "", sort: "relevancy" };
+var DEFAULT_SETTINGS = { forwarder: DEFAULT_FORWARDER, minimaps: "all", searchAsYouType: true, lastQuery: "", sort: "relevancy" };
 function loadSettings(api) {
   return { ...DEFAULT_SETTINGS, ...api.storage.get("settings", {}) };
 }
@@ -477,14 +484,14 @@ function report(status, err) {
   if (wasAborted(err)) status.set("Stopped.");
   else status.set(problem(err), "error");
 }
-function ghostRows(w, count = 8) {
+function ghostRows(w, thumbs, count = 8) {
   const widths = [78, 56, 88, 64, 72, 49, 83, 61];
   return Array.from(
     { length: count },
     (_, i) => h(
       "div",
-      { className: "sx-item sx-ghost", "aria-hidden": "true" },
-      h("div", { className: "sx-thumb" }, w.skeleton({ block: true, height: 44 })),
+      { className: `sx-item sx-ghost${thumbs ? "" : " no-thumb"}`, "aria-hidden": "true" },
+      thumbs && h("div", { className: "sx-thumb" }, w.skeleton({ block: true, height: 44 })),
       h("div", { className: "sx-item-text" }, w.skeleton({ width: `${widths[i % widths.length]}%` }), w.skeleton({ width: `${Math.max(24, widths[(i + 3) % widths.length] - 26)}%` }))
     )
   );
@@ -553,13 +560,16 @@ function openSettings(api) {
   const status = w.statusLine();
   const forwarder = h("input", { className: "input sx-grow", type: "text", placeholder: DEFAULT_FORWARDER, value: s.forwarder });
   const answer = h("div", { className: "sx-dim" });
+  const minimaps = h("select", { className: "select", style: "width: auto", "aria-label": "Minimaps" }, ...MINIMAP_CHOICES.map(([v, text]) => h("option", { value: v }, text)));
+  minimaps.value = s.minimaps;
+  const asYouType = w.checkbox("Search as you type", { value: s.searchAsYouType });
   const save = () => {
     const text = forwarder.value.trim();
     if (text && !normalizeAddress(text)) {
       status.set("Enter the forwarder's address with its scheme, like https://forwarder.example.com.", "error");
       return false;
     }
-    saveSettings(api, { ...s, forwarder: normalizeAddress(text) ?? "" });
+    saveSettings(api, { ...s, forwarder: normalizeAddress(text) ?? "", minimaps: minimaps.value, searchAsYouType: asYouType.input.checked });
     return true;
   };
   const testBtn = w.button("Test", { className: "sm", onClick: () => {
@@ -622,6 +632,14 @@ function openSettings(api) {
           h("div", { className: "sx-row" }, h("label", null, "Forwarder"), forwarder, testBtn),
           answer
         ),
+        h(
+          "div",
+          { className: "sx-sec" },
+          h("header", null, "Requests"),
+          h("p", { className: "sx-dim" }, "Searching as you type sends a search at each pause; off, only Enter and the Search button do. Every minimap is one more request to scmscx.com: one for each result that scrolls into view, and one for the map whose details are shown. Both take effect when the search dialog is next opened."),
+          h("div", { className: "sx-row" }, h("label", null, "Search"), asYouType),
+          h("div", { className: "sx-row" }, h("label", null, "Minimaps"), minimaps)
+        ),
         status
       );
       body.append(root);
@@ -639,6 +657,8 @@ var JOB_TEXT = {
 function openFind(api) {
   const settings = loadSettings(api);
   const client = new ScmscxClient({ bases: basesFor(settings) });
+  const thumbs = settings.minimaps === "all";
+  const bigPics = settings.minimaps !== "none";
   const w = api.ui.widgets;
   const status = w.statusLine();
   let handle = null;
@@ -744,25 +764,30 @@ function openFind(api) {
         incUnfinished.el
       );
       const list = h("div", { className: "sx-list", role: "listbox" });
+      const coverNote = h("span", null);
+      const cover = h("div", { className: "busy-cover", "aria-hidden": "true" }, h("div", { className: "busy-note" }, h("span", { className: "spinner sm" }), coverNote));
+      cover.hidden = true;
+      const listBox = h("div", { className: "busy-box sx-list-box" }, list, cover);
+      const setCover = (text) => {
+        cover.hidden = text === null;
+        if (text !== null) coverNote.textContent = text;
+        list.classList.toggle("is-busy", text !== null);
+        list.setAttribute("aria-busy", text !== null ? "true" : "false");
+      };
       const more = w.button("More results", { className: "sm", onClick: () => {
         void runSearch(true);
       } });
       more.style.display = "none";
       const count = h("span", { className: "sx-dim sx-grow" });
       const details = h("div", { className: "sx-details" });
-      const resultsPane = h("div", { className: "sx-results" }, h("div", { className: "sx-row" }, q, searchBtn, randomBtn), filters, extra, list, h("div", { className: "sx-row" }, count, more));
+      const resultsPane = h("div", { className: "sx-results" }, h("div", { className: "sx-row" }, q, searchBtn, randomBtn), filters, extra, listBox, h("div", { className: "sx-row" }, count, more));
       root.append(h("div", { className: "sx-find" }, resultsPane, details), status);
       let job = null;
       let inflight = null;
       let detail = null;
-      let cover = null;
       const setJob = (next) => {
         job = next;
-        if (next !== null && rows.length > 0) cover = w.busy(list, JOB_TEXT[next]);
-        else {
-          cover?.done();
-          cover = null;
-        }
+        setCover(next !== null && rows.length > 0 ? JOB_TEXT[next] : null);
         searchBtn.setBusy(next === "search" || next === "connect");
         searchBtn.disabled = next !== null;
         randomBtn.setBusy(next === "random" || next === "map");
@@ -825,37 +850,67 @@ function openFind(api) {
         box.append(img, placeholder);
         return box;
       };
-      const renderList = () => {
-        clear(list);
-        if (rows.length === 0) {
-          if (unreachable) return;
-          if (job) {
-            list.append(...ghostRows(w));
-            return;
-          }
-          list.append(h("div", { className: "sx-faint", style: "padding: 8px" }, answered ? "Nothing found." : "Nothing loaded yet."));
-          return;
-        }
-        for (const row of rows) {
+      const rowEls = /* @__PURE__ */ new Map();
+      const rowFor = (row) => {
+        const subText = [row.fileNames.join(", "), formatDate(row.lastModified)].filter(Boolean).join(" \xB7 ");
+        let r = rowEls.get(row.id);
+        if (!r) {
+          const name = h("b", { className: "sx-item-name" }, row.name);
+          const sub = h("div", { className: "sx-dim sx-item-sub" }, subText);
           const el = h(
             "div",
-            { className: `sx-item${selected?.id === row.id ? " on" : ""}`, role: "option", onClick: () => {
-              void pick(row);
+            { className: `sx-item${thumbs ? "" : " no-thumb"}`, role: "option", onClick: () => {
+              void pick(r.row);
             }, onDblClick: () => {
               void openSelected().then((ok) => {
                 if (ok) handle?.close();
               });
             } },
-            picture(row.id, "sx-thumb", "no picture"),
-            h(
-              "div",
-              { className: "sx-item-text" },
-              h("b", { className: "sx-item-name" }, row.name),
-              h("div", { className: "sx-dim sx-item-sub" }, [row.fileNames.join(", "), formatDate(row.lastModified)].filter(Boolean).join(" \xB7 "))
-            )
+            thumbs && picture(row.id, "sx-thumb", "no picture"),
+            h("div", { className: "sx-item-text" }, name, sub)
           );
-          list.append(el);
+          r = { el, name, sub, row };
+          rowEls.set(row.id, r);
+        } else {
+          r.row = row;
+          if (r.name.textContent !== row.name) r.name.textContent = row.name;
+          if (r.sub.textContent !== subText) r.sub.textContent = subText;
         }
+        return r.el;
+      };
+      const markSelected = () => {
+        for (const [id, r] of rowEls) {
+          const on = selected?.id === id;
+          r.el.classList.toggle("on", on);
+          if (on) r.el.setAttribute("aria-selected", "true");
+          else r.el.removeAttribute("aria-selected");
+        }
+      };
+      const renderList = () => {
+        if (rows.length === 0) {
+          rowEls.clear();
+          clear(list);
+          if (unreachable) return;
+          if (job) {
+            list.append(...ghostRows(w, thumbs));
+            return;
+          }
+          list.append(h("div", { className: "sx-faint", style: "padding: 8px" }, answered ? "Nothing found." : "Nothing loaded yet."));
+          return;
+        }
+        const listed = new Set(rows.map((r) => r.id));
+        for (const id of [...rowEls.keys()]) if (!listed.has(id)) rowEls.delete(id);
+        const want = rows.map(rowFor);
+        want.forEach((el, i) => {
+          if (list.children[i] !== el) list.insertBefore(el, list.children[i] ?? null);
+        });
+        while (list.children.length > want.length) list.lastElementChild?.remove();
+        markSelected();
+      };
+      let bigPic = null;
+      const bigPicture = (id) => {
+        if (bigPic?.id !== id) bigPic = { id, el: picture(id, "sx-bigframe", "no minimap") };
+        return bigPic.el;
       };
       const renderDetails = () => {
         clear(details);
@@ -870,7 +925,7 @@ function openFind(api) {
         const row = selected;
         const info = infos.get(row.id);
         details.append(h("h3", null, info?.name || row.name));
-        details.append(picture(row.id, "sx-bigframe", "no minimap"));
+        if (bigPics) details.append(bigPicture(row.id));
         if (!info) {
           if (loading.has(row.id)) details.append(w.spinner({ label: "Loading the details\u2026" }), ghostDetails(w));
           else details.append(h("p", { className: "sx-dim" }, "The details could not be loaded."));
@@ -901,7 +956,7 @@ function openFind(api) {
         selected = row;
         const fetch2 = !infos.has(row.id) && !loading.has(row.id);
         if (fetch2) loading.add(row.id);
-        renderList();
+        markSelected();
         renderDetails();
         if (!fetch2) return;
         detail?.abort();
@@ -936,7 +991,7 @@ function openFind(api) {
           end(stop);
           show({ rows: [row], total: 1, fetched: 1 }, false, label);
           selected = row;
-          renderList();
+          markSelected();
           renderDetails();
           status.set("");
         } catch (err) {
@@ -991,6 +1046,7 @@ function openFind(api) {
       let timer = 0;
       q.addEventListener("input", () => {
         window.clearTimeout(timer);
+        if (!settings.searchAsYouType) return;
         if (!unreachable) status.busy(JOB_TEXT.search);
         timer = window.setTimeout(() => {
           void runSearch();
@@ -1034,7 +1090,6 @@ function openFind(api) {
         seq++;
         inflight?.abort();
         detail?.abort();
-        cover?.done();
       };
     }
   });
