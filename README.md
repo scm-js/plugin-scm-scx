@@ -1,6 +1,6 @@
 # scmscx.com plugin
 
-A plugin for [scmJS](https://github.com/jeany55/scm-js), the browser-based StarCraft 1 /
+A plugin for [scmJS](https://github.com/scm-js/scm-js), the browser-based StarCraft 1 /
 Brood War map editor. It searches [scmscx.com](https://scmscx.com), an archive of
 StarCraft maps, from inside the editor and opens the map you pick. It reaches
 scmscx.com and the forwarder below and nothing else; the two menu items it adds carry
