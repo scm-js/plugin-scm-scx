@@ -510,7 +510,7 @@ function unreachableNotice(w, err, query, onSettings) {
   box.append(
     h("p", null, "scmscx.com could not be reached from this page."),
     h("p", { className: "sx-dim" }, "The site's API sends no CORS header, so a browser lets only pages served from scmscx.com read its answers. Until the site allows it, search there in a new tab, download the map, and drop the file onto the editor."),
-    h("p", { className: "sx-dim" }, "The forwarder that would otherwise pass the requests on did not answer either. Settings has its address; you can point it at one of your own.")
+    h("p", { className: "sx-dim" }, "The forwarder that would otherwise pass the requests on did not answer either. Settings\u2026 has its address; you can point it at one of your own.")
   );
   if (err.attempts.length) {
     box.append(h("ul", { className: "sx-attempts sx-faint" }, ...err.attempts.map((a) => h("li", null, `${a.base} \u2014 ${a.reason}`))));
@@ -554,96 +554,116 @@ function describeOpened(api) {
   const starts = api.query.startLocations().length;
   return ` \u2014 ${info.width} \xD7 ${info.height} ${info.tileset}${starts > 0 ? `, ${starts} start locations` : ""}${stats ? `, ${stats.units.total} units` : ""}`;
 }
+var BAD_ADDRESS = "Enter the forwarder's address with its scheme, like https://forwarder.example.com.";
+var PREFERENCES_PAGE = "plugin:scm-scx";
 function openSettings(api) {
-  const s = loadSettings(api);
+  api.ui.open("preferences", { page: PREFERENCES_PAGE });
+}
+function registerPreferencesPage(api) {
   const w = api.ui.widgets;
-  const status = w.statusLine();
-  const forwarder = h("input", { className: "input sx-grow", type: "text", placeholder: DEFAULT_FORWARDER, value: s.forwarder });
-  const answer = h("div", { className: "sx-dim" });
-  const minimaps = h("select", { className: "select", style: "width: auto", "aria-label": "Minimaps" }, ...MINIMAP_CHOICES.map(([v, text]) => h("option", { value: v }, text)));
-  minimaps.value = s.minimaps;
-  const asYouType = w.checkbox("Search as you type", { value: s.searchAsYouType });
-  const save = () => {
-    const text = forwarder.value.trim();
-    if (text && !normalizeAddress(text)) {
-      status.set("Enter the forwarder's address with its scheme, like https://forwarder.example.com.", "error");
-      return false;
-    }
-    saveSettings(api, { ...s, forwarder: normalizeAddress(text) ?? "", minimaps: minimaps.value, searchAsYouType: asYouType.input.checked });
-    return true;
-  };
-  const testBtn = w.button("Test", { className: "sm", onClick: () => {
-    void test();
-  } });
-  let testing = null;
-  const test = async () => {
-    const text = forwarder.value.trim();
-    if (text && !normalizeAddress(text)) {
-      status.set("Enter the forwarder's address with its scheme, like https://forwarder.example.com.", "error");
-      return;
-    }
-    testing?.abort();
-    const stop = new AbortController();
-    testing = stop;
-    const client = new ScmscxClient({ bases: basesFor({ ...s, forwarder: text }) });
-    testBtn.setBusy(true);
-    status.busy("Trying each address in turn\u2026");
-    status.cancel(() => {
-      stop.abort();
-    });
-    clear(answer);
-    answer.append(w.spinner({ label: "Waiting for an answer\u2026" }));
-    try {
-      const { base, latest } = await client.connect({ signal: stop.signal });
-      if (testing !== stop) return;
-      status.set(base === SCMSCX ? "scmscx.com answered directly." : `scmscx.com answered through ${base}.`, "ok");
-      clear(answer);
-      answer.textContent = `${latest.total} maps in the archive.`;
-    } catch (err) {
-      if (testing !== stop) return;
-      clear(answer);
-      report(status, err);
-      if (err instanceof ScmscxError && err.attempts.length) {
-        answer.append(h("ul", { className: "sx-attempts" }, ...err.attempts.map((a) => h("li", null, `${a.base} \u2014 ${a.reason}`))));
-      }
-    } finally {
-      if (testing === stop) {
-        testing = null;
-        testBtn.setBusy(false);
-        status.cancel(null);
-      }
-    }
-  };
-  api.ui.dialog({
-    title: "scmscx.com Settings",
-    size: "md",
-    buttons: [
-      { label: "OK", primary: true, run: () => save() },
-      { label: "Cancel" }
-    ],
+  let pending = null;
+  let reset = null;
+  api.ui.preferencesPage({
     mount(body) {
+      const s = loadSettings(api);
+      const status = w.statusLine();
+      const forwarder = w.text({
+        value: s.forwarder,
+        placeholder: DEFAULT_FORWARDER,
+        onChange: (v) => {
+          const text = v.trim();
+          if (text && !normalizeAddress(text)) status.set(BAD_ADDRESS, "error");
+          else status.set("");
+        }
+      });
+      forwarder.classList.add("sx-grow");
+      const answer = h("div", { className: "sx-dim" });
+      const minimaps = w.select(MINIMAP_CHOICES.map(([value, label]) => ({ value, label })), { value: s.minimaps });
+      const asYouType = w.checkbox("Search as you type", { value: s.searchAsYouType });
+      const testBtn = w.button("Test", { className: "sm", onClick: () => {
+        void test();
+      } });
+      let testing = null;
+      const test = async () => {
+        const text = forwarder.value.trim();
+        if (text && !normalizeAddress(text)) {
+          status.set(BAD_ADDRESS, "error");
+          return;
+        }
+        testing?.abort();
+        const stop = new AbortController();
+        testing = stop;
+        const client = new ScmscxClient({ bases: basesFor({ ...s, forwarder: text }) });
+        testBtn.setBusy(true);
+        status.busy("Trying each address in turn\u2026");
+        status.cancel(() => {
+          stop.abort();
+        });
+        clear(answer);
+        answer.append(w.spinner({ label: "Waiting for an answer\u2026" }));
+        try {
+          const { base, latest } = await client.connect({ signal: stop.signal });
+          if (testing !== stop) return;
+          status.set(base === SCMSCX ? "scmscx.com answered directly." : `scmscx.com answered through ${base}.`, "ok");
+          clear(answer);
+          answer.textContent = `${latest.total} maps in the archive.`;
+        } catch (err) {
+          if (testing !== stop) return;
+          clear(answer);
+          report(status, err);
+          if (err instanceof ScmscxError && err.attempts.length) {
+            answer.append(h("ul", { className: "sx-attempts" }, ...err.attempts.map((a) => h("li", null, `${a.base} \u2014 ${a.reason}`))));
+          }
+        } finally {
+          if (testing === stop) {
+            testing = null;
+            testBtn.setBusy(false);
+            status.cancel(null);
+          }
+        }
+      };
+      pending = () => {
+        const current = loadSettings(api);
+        const text = forwarder.value.trim();
+        const address = text ? normalizeAddress(text) : "";
+        if (address === null) status.set(BAD_ADDRESS, "error");
+        saveSettings(api, { ...current, forwarder: address ?? current.forwarder, minimaps: minimaps.value, searchAsYouType: asYouType.input.checked });
+      };
+      reset = () => {
+        forwarder.value = DEFAULT_SETTINGS.forwarder;
+        minimaps.value = DEFAULT_SETTINGS.minimaps;
+        asYouType.input.checked = DEFAULT_SETTINGS.searchAsYouType;
+        clear(answer);
+        status.set("");
+      };
       const root = h("div", { className: "sx" }, h("style", null, STYLE));
       root.append(
-        h(
-          "div",
-          { className: "sx-sec" },
-          h("header", null, "Connection"),
-          h("p", { className: "sx-dim" }, `Requests go to ${SCMSCX} first. The site's API sends no CORS header, so a page served from anywhere else cannot read its answers; a forwarder \u2014 an address that passes each request on to the site \u2014 is tried next. The plugin comes with one; put your own here to use it instead, or empty the field for none.`),
+        w.group(
+          "Connection",
+          w.hint(`Requests go to ${SCMSCX} first. The site's API sends no CORS header, so a page served from anywhere else cannot read its answers; a forwarder \u2014 an address that passes each request on to the site \u2014 is tried next. The plugin comes with one; put your own here to use it instead, or empty the field for none.`),
           h("div", { className: "sx-row" }, h("label", null, "Forwarder"), forwarder, testBtn),
-          answer
+          answer,
+          status
         ),
-        h(
-          "div",
-          { className: "sx-sec" },
-          h("header", null, "Requests"),
-          h("p", { className: "sx-dim" }, "Searching as you type sends a search at each pause; off, only Enter and the Search button do. Every minimap is one more request to scmscx.com: one for each result that scrolls into view, and one for the map whose details are shown. Both take effect when the search dialog is next opened."),
-          h("div", { className: "sx-row" }, h("label", null, "Search"), asYouType),
-          h("div", { className: "sx-row" }, h("label", null, "Minimaps"), minimaps)
-        ),
-        status
+        w.group(
+          "Requests",
+          w.form([
+            { label: "Search", field: asYouType },
+            { label: "Minimaps", field: minimaps }
+          ]),
+          w.hint("Searching as you type sends a search at each pause; off, only Enter and the Search button do. Every minimap is one more request to scmscx.com: one for each result that scrolls into view, and one for the map whose details are shown. Both take effect when the search dialog is next opened.")
+        )
       );
       body.append(root);
-    }
+      return () => {
+        testing?.abort();
+        testing = null;
+        pending = null;
+        reset = null;
+      };
+    },
+    apply: () => pending?.(),
+    reset: () => reset?.()
   });
 }
 var FIND_TITLE = "Find on scmscx.com";
@@ -1098,7 +1118,7 @@ function activate(api) {
   api.commands.register({ id: "find", title: "Find on scmscx.com\u2026", run: () => openFind(api) });
   api.commands.register({ id: "settings", title: "scmscx.com Settings\u2026", run: () => openSettings(api) });
   api.menu.add("File", { label: "Find on scmscx.com\u2026", icon: "plugin", after: "Open Recent", command: "find" });
-  api.menu.add("Plugins", { label: "scmscx.com Settings\u2026", icon: "plugin", command: "settings" });
+  registerPreferencesPage(api);
 }
 export {
   activate as default

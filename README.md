@@ -30,7 +30,8 @@ and press **Add**. It is in that list by default. To pin a version, add a ref:
   forces. **Open** downloads it and opens it in the editor (a modified map goes through
   the usual Close Scenario question first). **Random** picks one map among the matches.
   Pasting a map address from the site (`https://scmscx.com/map/…`) shows that map.
-- **Plugins ▸ scmscx.com Settings…**. The forwarder address, and a test; whether typing
+- **Edit ▸ Preferences ▸ Plugins ▸ scmscx.com** (also the Settings… button in the search
+  dialog when the site cannot be reached). The forwarder address, and a test; whether typing
   searches at each pause or only Enter and the Search button do; and which minimaps the
   search shows — beside each result and in the details, in the details only, or none.
   Every search and every minimap is one request to the site, so both settings are ways to
@@ -59,7 +60,7 @@ and needs no account. It keeps the site's *answers* for a while, so that a map's
 are asked for once rather than once per reader — seven days for a map's details, six
 hours for its file names, five minutes for a search, never for a random pick — and keeps
 nothing about who asked for them. Deploy your own from that repository and put its
-address in Settings to use it instead, or empty the field for no forwarder at all.
+address in the plugin's Preferences page to use it instead, or empty the field for no forwarder at all.
 
 The site is asked first every time, so nothing changes for an editor served from
 scmscx.com, and the forwarder falls out of the picture the day the site sends the
