@@ -3,6 +3,7 @@
 export const KO: Record<string, string> = {
   "1 map, at random": "무작위로 고른 맵 1개",
   "1 map, by address": "주소로 찾은 맵 1개",
+  "1 map, from a link": "링크로 연 맵 1개",
   "Any size": "모든 크기",
   "Any tileset": "모든 타일셋",
   "Ash World": "애쉬월드",

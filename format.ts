@@ -74,12 +74,33 @@ export function triggersLabel(info: Pick<MapInfo, "triggers" | "briefingTriggers
 
 /**
  * The map id in something pasted from the site — `https://scmscx.com/map/35b32Dsq`, with or
- * without the scheme, a trailing path, a query or a hash. Null for anything else: a bare
- * id is not recognised, since it would be taken for a search word.
+ * without the scheme, a trailing path, a query or a hash — or an editor link to a map
+ * (`https://editor.scmjs.dev/scmscx/35b32Dsq`). Null for anything else: a bare id is not
+ * recognised, since it would be taken for a search word.
  */
 export function parseMapRef(text: string): string | null {
-  const m = /^(?:https?:\/\/)?(?:www\.)?scmscx\.com\/map\/([A-Za-z0-9]+)(?:[/?#].*)?$/i.exec(text.trim());
-  return m ? m[1] : null;
+  const trimmed = text.trim();
+  const m = /^(?:https?:\/\/)?(?:www\.)?scmscx\.com\/map\/([A-Za-z0-9]+)(?:[/?#].*)?$/i.exec(trimmed);
+  if (m) return m[1];
+  const link = /^https?:\/\/[^/?#]+(\/[^?#]*)(?:[?#].*)?$/i.exec(trimmed);
+  return link ? mapIdOnPage(link[1]) : null;
+}
+
+/** `<base>scmscx/<id>`, with or without a trailing slash; group 1 is the base, group 2 the id. */
+const LINK_PATH = /^(.*\/)scmscx\/([A-Za-z0-9]+)\/?$/;
+
+/**
+ * The map id on the editor's own address, when it was opened from a link to a map on the
+ * site (`https://editor.scmjs.dev/scmscx/35b32Dsq`). The editor answers any path with its
+ * one page, so nothing needs to exist at that path. Null for any other path.
+ */
+export function mapIdOnPage(pathname: string): string | null {
+  return LINK_PATH.exec(pathname)?.[2] ?? null;
+}
+
+/** The path the editor is served from: the page's path less a `scmscx/<id>` on the end. */
+export function editorBase(pathname: string): string {
+  return LINK_PATH.exec(pathname)?.[1] ?? pathname;
 }
 
 /** A forwarder address the way the client wants it: scheme required, no trailing slash. Null when blank or unusable. */

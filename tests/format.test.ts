@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { downloadName, eudLabel, formatDate, formatSize, normalizeAddress, objectsLabel, parseMapRef, playersLabel, stripControls, tilesetName, triggersLabel, versionName } from "../format";
+import { downloadName, eudLabel, formatDate, formatSize, editorBase, mapIdOnPage, normalizeAddress, objectsLabel, parseMapRef, playersLabel, stripControls, tilesetName, triggersLabel, versionName } from "../format";
 
 describe("format", () => {
   it("formats dates from unix seconds and sizes from bytes", () => {
@@ -45,6 +45,22 @@ describe("format", () => {
     expect(parseMapRef("35b32Dsq")).toBeNull();
     expect(parseMapRef("https://scmscx.com/search/lost")).toBeNull();
     expect(parseMapRef("lost temple")).toBeNull();
+    expect(parseMapRef("https://editor.scmjs.dev/scmscx/35b32Dsq")).toBe("35b32Dsq");
+    expect(parseMapRef("http://localhost:5173/scmscx/35b32Dsq/?nosplash")).toBe("35b32Dsq");
+    expect(parseMapRef("https://editor.scmjs.dev/map/35b32Dsq")).toBeNull();
+  });
+
+  it("reads an editor link to a map off the page's path", () => {
+    expect(mapIdOnPage("/scmscx/35b32Dsq")).toBe("35b32Dsq");
+    expect(mapIdOnPage("/scmscx/35b32Dsq/")).toBe("35b32Dsq");
+    expect(mapIdOnPage("/editor/scmscx/35b32Dsq")).toBe("35b32Dsq");
+    expect(mapIdOnPage("/")).toBeNull();
+    expect(mapIdOnPage("/scmscx/")).toBeNull();
+    expect(mapIdOnPage("/map/35b32Dsq")).toBeNull();
+    expect(mapIdOnPage("/scmscx/35b32Dsq/extra")).toBeNull();
+    expect(editorBase("/scmscx/35b32Dsq")).toBe("/");
+    expect(editorBase("/editor/scmscx/35b32Dsq/")).toBe("/editor/");
+    expect(editorBase("/editor/")).toBe("/editor/");
   });
 
   it("normalises a forwarder address", () => {

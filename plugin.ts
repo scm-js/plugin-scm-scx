@@ -8,6 +8,9 @@
  *   order, tileset, players and size, read a map's details with its minimap, and open
  *   it in the editor. A pasted map address (`https://scmscx.com/map/…`) opens that map's
  *   details straight away; Random picks one of the matches.
+ * - A link to a map, `<editor>/scmscx/<id>` (`https://editor.scmjs.dev/scmscx/35b32Dsq`):
+ *   the editor starts with the search open on that map, and Open downloads it. Nothing is
+ *   downloaded until the person opening the link says so.
  * - Edit ▸ Preferences ▸ Plugins ▸ scmscx.com: the forwarder address, for when the page
  *   cannot read the site directly, and how much the search asks of the site.
  *
@@ -35,7 +38,7 @@
  */
 import type { DialogHandle, PluginApi, StatusLineElement, WidgetsApi } from "@scm-js/plugin-api";
 import { attemptReason, minimapUrl, ScmscxClient, ScmscxError, SCMSCX, SORTS, TILESETS, wasAborted, type MapInfo, type SearchQuery, type SearchRow, type Sort, type TilesetKey } from "./client";
-import { downloadName, eudLabel, formatDate, formatSize, normalizeAddress, objectsLabel, parseMapRef, playersLabel, TILESET_NAMES, tilesetName, triggersLabel, versionName } from "./format";
+import { downloadName, editorBase, eudLabel, formatDate, formatSize, mapIdOnPage, normalizeAddress, objectsLabel, parseMapRef, playersLabel, TILESET_NAMES, tilesetName, triggersLabel, versionName } from "./format";
 import { msg, type Params } from "./i18n";
 import { KO } from "./ko";
 
@@ -381,7 +384,11 @@ const JOB_TEXT: Record<Job, string> = {
   map: msg("Loading the map…"),
 };
 
-function openFind(api: PluginApi) {
+/**
+ * The search dialog. `linked` is a map id to show once the site answers — the one on the
+ * editor's address when it was opened from a link to a map — selected over the newest uploads.
+ */
+function openFind(api: PluginApi, linked: string | null = null) {
   const settings = loadSettings(api);
   const client = new ScmscxClient({ bases: basesFor(settings) });
   // Which minimaps to ask for, read once for the dialog's life: a row keeps its picture, so
@@ -793,8 +800,10 @@ function openFind(api: PluginApi) {
         if (mine !== seq) return;
         end(first);
         status.set("");
-        if (q.value.trim()) { void runSearch(); return; }
+        if (q.value.trim() && !linked) { void runSearch(); return; }
         show(latest, false, t("{n, plural, one {# map} other {# maps}}, newest uploads first", { n: latest.total }));
+        // A linked map that the site does not have leaves the newest uploads listed and says so.
+        if (linked) void showOne(linked, ++seq, t("1 map, from a link"));
       }).catch((err) => {
         if (mine !== seq) return;
         end(first);
@@ -823,4 +832,14 @@ export default function activate(api: PluginApi) {
 
   api.menu.add("File", { label: msg("Find on scmscx.com…"), icon: "plugin", after: "Open Recent", command: "find" });
   registerPreferencesPage(api);
+
+  // Opened from a link to a map (`scmscx/<id>`): the address goes back to the editor's own,
+  // so a reload opens the editor and not the link again, and the search opens on that map.
+  const linked = typeof location !== "undefined" ? mapIdOnPage(location.pathname) : null;
+  if (linked) {
+    const url = new URL(location.href);
+    url.pathname = editorBase(url.pathname);
+    history.replaceState(history.state, "", url.toString());
+    openFind(api, linked);
+  }
 }

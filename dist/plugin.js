@@ -439,8 +439,18 @@ function triggersLabel(info, t2 = english) {
   return info.briefingTriggers ? t2("{n, plural, one {# trigger} other {# triggers}}, {briefing} briefing", { n: info.triggers, briefing: info.briefingTriggers }) : t2("{n, plural, one {# trigger} other {# triggers}}", { n: info.triggers });
 }
 function parseMapRef(text) {
-  const m = /^(?:https?:\/\/)?(?:www\.)?scmscx\.com\/map\/([A-Za-z0-9]+)(?:[/?#].*)?$/i.exec(text.trim());
-  return m ? m[1] : null;
+  const trimmed = text.trim();
+  const m = /^(?:https?:\/\/)?(?:www\.)?scmscx\.com\/map\/([A-Za-z0-9]+)(?:[/?#].*)?$/i.exec(trimmed);
+  if (m) return m[1];
+  const link2 = /^https?:\/\/[^/?#]+(\/[^?#]*)(?:[?#].*)?$/i.exec(trimmed);
+  return link2 ? mapIdOnPage(link2[1]) : null;
+}
+var LINK_PATH = /^(.*\/)scmscx\/([A-Za-z0-9]+)\/?$/;
+function mapIdOnPage(pathname) {
+  return LINK_PATH.exec(pathname)?.[2] ?? null;
+}
+function editorBase(pathname) {
+  return LINK_PATH.exec(pathname)?.[1] ?? pathname;
 }
 function normalizeAddress(text) {
   const trimmed = text.trim().replace(/\/+$/, "");
@@ -462,6 +472,7 @@ function downloadName(info) {
 var KO = {
   "1 map, at random": "\uBB34\uC791\uC704\uB85C \uACE0\uB978 \uB9F5 1\uAC1C",
   "1 map, by address": "\uC8FC\uC18C\uB85C \uCC3E\uC740 \uB9F5 1\uAC1C",
+  "1 map, from a link": "\uB9C1\uD06C\uB85C \uC5F0 \uB9F5 1\uAC1C",
   "Any size": "\uBAA8\uB4E0 \uD06C\uAE30",
   "Any tileset": "\uBAA8\uB4E0 \uD0C0\uC77C\uC14B",
   "Ash World": "\uC560\uC26C\uC6D4\uB4DC",
@@ -888,7 +899,7 @@ var JOB_TEXT = {
   random: msg("Picking a map at random\u2026"),
   map: msg("Loading the map\u2026")
 };
-function openFind(api) {
+function openFind(api, linked = null) {
   const settings = loadSettings(api);
   const client = new ScmscxClient({ bases: basesFor(settings) });
   const thumbs = settings.minimaps === "all";
@@ -1300,11 +1311,12 @@ function openFind(api) {
         if (mine !== seq) return;
         end(first);
         status.set("");
-        if (q.value.trim()) {
+        if (q.value.trim() && !linked) {
           void runSearch();
           return;
         }
         show(latest, false, t("{n, plural, one {# map} other {# maps}}, newest uploads first", { n: latest.total }));
+        if (linked) void showOne(linked, ++seq, t("1 map, from a link"));
       }).catch((err) => {
         if (mine !== seq) return;
         end(first);
@@ -1335,6 +1347,13 @@ function activate(api) {
   api.commands.register({ id: "settings", title: msg("scmscx.com Settings\u2026"), run: () => openSettings(api) });
   api.menu.add("File", { label: msg("Find on scmscx.com\u2026"), icon: "plugin", after: "Open Recent", command: "find" });
   registerPreferencesPage(api);
+  const linked = typeof location !== "undefined" ? mapIdOnPage(location.pathname) : null;
+  if (linked) {
+    const url = new URL(location.href);
+    url.pathname = editorBase(url.pathname);
+    history.replaceState(history.state, "", url.toString());
+    openFind(api, linked);
+  }
 }
 export {
   activate as default

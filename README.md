@@ -30,6 +30,12 @@ and press **Add**. It is in that list by default. To pin a version, add a ref:
   forces. **Open** downloads it and opens it in the editor (a modified map goes through
   the usual Close Scenario question first). **Random** picks one map among the matches.
   Pasting a map address from the site (`https://scmscx.com/map/…`) shows that map.
+- **Links to a map.** `https://editor.scmjs.dev/scmscx/<id>`, where `<id>` is the last part
+  of the map's address on the site (`https://scmscx.com/map/35b32Dsq` →
+  `https://editor.scmjs.dev/scmscx/35b32Dsq`), starts the editor with the search dialog
+  open on that map. Nothing is downloaded until **Open** is pressed. An id the site does
+  not know leaves the newest uploads listed and says so. The same works on any editor
+  address with `scmscx/<id>` added to the end; the desktop editor has no address to link to.
 - **Edit ▸ Preferences ▸ Plugins ▸ scmscx.com** (also the Settings… button in the search
   dialog when the site cannot be reached). The forwarder address, and a test; whether typing
   searches at each pause or only Enter and the Search button do; and which minimaps the
