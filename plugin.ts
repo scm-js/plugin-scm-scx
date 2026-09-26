@@ -34,8 +34,13 @@
  * its own `src/plugins/api.ts`; the host erases the type-only import.
  */
 import type { DialogHandle, PluginApi, StatusLineElement, WidgetsApi } from "@scm-js/plugin-api";
-import { minimapUrl, ScmscxClient, ScmscxError, SCMSCX, SORTS, TILESETS, wasAborted, type MapInfo, type SearchQuery, type SearchRow, type Sort, type TilesetKey } from "./client";
+import { attemptReason, minimapUrl, ScmscxClient, ScmscxError, SCMSCX, SORTS, TILESETS, wasAborted, type MapInfo, type SearchQuery, type SearchRow, type Sort, type TilesetKey } from "./client";
 import { downloadName, eudLabel, formatDate, formatSize, normalizeAddress, objectsLabel, parseMapRef, playersLabel, TILESET_NAMES, tilesetName, triggersLabel, versionName } from "./format";
+import { msg, type Params } from "./i18n";
+import { KO } from "./ko";
+
+/** `api.i18n.t`, bound when the plugin activates. Map names, descriptions and what the site sends are shown as they are. */
+let t = (text: string, _params?: Params): string => text;
 
 /* ── DOM helpers ────────────────────────────────────────── */
 
@@ -113,9 +118,9 @@ const STYLE = `
 type Minimaps = "all" | "details" | "none";
 
 const MINIMAP_CHOICES: readonly (readonly [Minimaps, string])[] = [
-  ["all", "Beside each result and in the details"],
-  ["details", "In the details only"],
-  ["none", "None"],
+  ["all", msg("Beside each result and in the details")],
+  ["details", msg("In the details only")],
+  ["none", msg("None")],
 ];
 
 interface Settings {
@@ -151,11 +156,11 @@ function basesFor(settings: Settings): string[] {
   return forwarder ? [SCMSCX, forwarder] : [SCMSCX];
 }
 
-const problem = (err: unknown) => (err instanceof ScmscxError ? err.sentence : err instanceof Error ? err.message : String(err));
+const problem = (err: unknown) => (err instanceof ScmscxError ? err.say(t) : err instanceof Error ? err.message : String(err));
 
 /** The status line's "stopped" or failure line for an error, in the line's own colour. */
 function report(status: StatusLineElement, err: unknown) {
-  if (wasAborted(err)) status.set("Stopped.");
+  if (wasAborted(err)) status.set(t("Stopped."));
   else status.set(problem(err), "error");
 }
 
@@ -186,19 +191,19 @@ function siteSearchUrl(query: string): string {
 /* ── Why the site could not be reached ──────────────────── */
 
 function unreachableNotice(w: WidgetsApi, err: ScmscxError, query: string, onSettings: () => void): HTMLElement {
-  const box = h("div", { className: "sx-sec" }, h("header", null, "Not connected"));
+  const box = h("div", { className: "sx-sec" }, h("header", null, t("Not connected")));
   box.append(
-    h("p", null, "scmscx.com could not be reached from this page."),
-    h("p", { className: "sx-dim" }, "The site's API sends no CORS header, so a browser lets only pages served from scmscx.com read its answers. Until the site allows it, search there in a new tab, download the map, and drop the file onto the editor."),
-    h("p", { className: "sx-dim" }, "The forwarder that would otherwise pass the requests on did not answer either. Settings… has its address; you can point it at one of your own."),
+    h("p", null, t("scmscx.com could not be reached from this page.")),
+    h("p", { className: "sx-dim" }, t("The site's API sends no CORS header, so a browser lets only pages served from scmscx.com read its answers. Until the site allows it, search there in a new tab, download the map, and drop the file onto the editor.")),
+    h("p", { className: "sx-dim" }, t("The forwarder that would otherwise pass the requests on did not answer either. Settings… has its address; you can point it at one of your own.")),
   );
   if (err.attempts.length) {
-    box.append(h("ul", { className: "sx-attempts sx-faint" }, ...err.attempts.map((a) => h("li", null, `${a.base} — ${a.reason}`))));
+    box.append(h("ul", { className: "sx-attempts sx-faint" }, ...err.attempts.map((a) => h("li", null, `${a.base} — ${attemptReason(a, t)}`))));
   }
   box.append(
     h("div", { className: "sx-row" },
-      w.button("Open scmscx.com in a new tab", { className: "sm", onClick: () => { window.open(siteSearchUrl(query), "_blank", "noopener"); } }),
-      w.button("Settings…", { className: "sm", onClick: onSettings }),
+      w.button(t("Open scmscx.com in a new tab"), { className: "sm", onClick: () => { window.open(siteSearchUrl(query), "_blank", "noopener"); } }),
+      w.button(t("Settings…"), { className: "sm", onClick: onSettings }),
     ),
   );
   return box;
@@ -215,18 +220,20 @@ function unreachableNotice(w: WidgetsApi, err: ScmscxError, query: string, onSet
 async function openMap(api: PluginApi, client: ScmscxClient, info: MapInfo, status: StatusLineElement, signal?: AbortSignal): Promise<boolean> {
   const fileName = downloadName(info);
   const whole = info.mpqSize > 0 ? info.mpqSize : null;
-  status.progress(`Downloading ${fileName}${whole ? ` (${formatSize(whole)})` : ""}…`, 0);
+  status.progress(whole ? t("Downloading {file} ({size})…", { file: fileName, size: formatSize(whole) }) : t("Downloading {file}…", { file: fileName }), 0);
   const bytes = await client.file(info.mpqHash, {
     signal,
     onProgress: (loaded, total) => {
       const size = total ?? whole;
-      status.progress(`Downloading ${fileName} — ${formatSize(loaded)}${size ? ` of ${formatSize(size)}` : ""}`, size ? Math.min(1, loaded / size) : null);
+      status.progress(size
+        ? t("Downloading {file} — {loaded} of {size}", { file: fileName, loaded: formatSize(loaded), size: formatSize(size) })
+        : t("Downloading {file} — {loaded}", { file: fileName, loaded: formatSize(loaded) }), size ? Math.min(1, loaded / size) : null);
     },
   });
-  status.busy(`Opening ${fileName}…`);
+  status.busy(t("Opening {file}…", { file: fileName }));
   const opened = await api.document.open(bytes, fileName);
-  if (!opened) { status.set("The map was not opened."); return false; }
-  api.ui.status(`Opened ${fileName} from scmscx.com${describeOpened(api)}`);
+  if (!opened) { status.set(t("The map was not opened.")); return false; }
+  api.ui.status(t("Opened {file} from scmscx.com{what}", { file: fileName, what: describeOpened(api) }));
   return true;
 }
 
@@ -236,12 +243,15 @@ function describeOpened(api: PluginApi): string {
   const stats = api.query.statistics();
   if (!info) return "";
   const starts = api.query.startLocations().length;
-  return ` — ${info.width} × ${info.height} ${info.tileset}${starts > 0 ? `, ${starts} start locations` : ""}${stats ? `, ${stats.units.total} units` : ""}`;
+  const parts = [`${info.width} × ${info.height} ${info.tileset}`];
+  if (starts > 0) parts.push(t("{n, plural, one {# start location} other {# start locations}}", { n: starts }));
+  if (stats) parts.push(t("{n, plural, one {# unit} other {# units}}", { n: stats.units.total }));
+  return ` — ${parts.join(", ")}`;
 }
 
 /* ── Preferences page ───────────────────────────────────── */
 
-const BAD_ADDRESS = "Enter the forwarder's address with its scheme, like https://forwarder.example.com.";
+const BAD_ADDRESS = msg("Enter the forwarder's address with its scheme, like https://forwarder.example.com.");
 
 /** The page id `api.ui.open("preferences", { page })` takes. */
 const PREFERENCES_PAGE = "plugin:scm-scx";
@@ -270,42 +280,42 @@ function registerPreferencesPage(api: PluginApi) {
         placeholder: DEFAULT_FORWARDER,
         onChange: (v) => {
           const text = v.trim();
-          if (text && !normalizeAddress(text)) status.set(BAD_ADDRESS, "error");
+          if (text && !normalizeAddress(text)) status.set(t(BAD_ADDRESS), "error");
           else status.set("");
         },
       });
       forwarder.classList.add("sx-grow");
       const answer = h("div", { className: "sx-dim" });
-      const minimaps = w.select(MINIMAP_CHOICES.map(([value, label]) => ({ value, label })), { value: s.minimaps });
-      const asYouType = w.checkbox("Search as you type", { value: s.searchAsYouType });
+      const minimaps = w.select(MINIMAP_CHOICES.map(([value, label]) => ({ value, label: t(label) })), { value: s.minimaps });
+      const asYouType = w.checkbox(t("Search as you type"), { value: s.searchAsYouType });
 
-      const testBtn = w.button("Test", { className: "sm", onClick: () => { void test(); } });
+      const testBtn = w.button(t("Test"), { className: "sm", onClick: () => { void test(); } });
       let testing: AbortController | null = null;
 
       const test = async () => {
         const text = forwarder.value.trim();
-        if (text && !normalizeAddress(text)) { status.set(BAD_ADDRESS, "error"); return; }
+        if (text && !normalizeAddress(text)) { status.set(t(BAD_ADDRESS), "error"); return; }
         testing?.abort();
         const stop = new AbortController();
         testing = stop;
         const client = new ScmscxClient({ bases: basesFor({ ...s, forwarder: text }) });
         testBtn.setBusy(true);
-        status.busy("Trying each address in turn…");
+        status.busy(t("Trying each address in turn…"));
         status.cancel(() => { stop.abort(); });
         clear(answer);
-        answer.append(w.spinner({ label: "Waiting for an answer…" }));
+        answer.append(w.spinner({ label: t("Waiting for an answer…") }));
         try {
           const { base, latest } = await client.connect({ signal: stop.signal });
           if (testing !== stop) return;
-          status.set(base === SCMSCX ? "scmscx.com answered directly." : `scmscx.com answered through ${base}.`, "ok");
+          status.set(base === SCMSCX ? t("scmscx.com answered directly.") : t("scmscx.com answered through {address}.", { address: base }), "ok");
           clear(answer);
-          answer.textContent = `${latest.total} maps in the archive.`;
+          answer.textContent = t("{n, plural, one {# map} other {# maps}} in the archive.", { n: latest.total });
         } catch (err) {
           if (testing !== stop) return;
           clear(answer);
           report(status, err);
           if (err instanceof ScmscxError && err.attempts.length) {
-            answer.append(h("ul", { className: "sx-attempts" }, ...err.attempts.map((a) => h("li", null, `${a.base} — ${a.reason}`))));
+            answer.append(h("ul", { className: "sx-attempts" }, ...err.attempts.map((a) => h("li", null, `${a.base} — ${attemptReason(a, t)}`))));
           }
         } finally {
           if (testing === stop) {
@@ -320,7 +330,7 @@ function registerPreferencesPage(api: PluginApi) {
         const current = loadSettings(api);
         const text = forwarder.value.trim();
         const address = text ? normalizeAddress(text) : "";
-        if (address === null) status.set(BAD_ADDRESS, "error");
+        if (address === null) status.set(t(BAD_ADDRESS), "error");
         saveSettings(api, { ...current, forwarder: address ?? current.forwarder, minimaps: minimaps.value as Minimaps, searchAsYouType: asYouType.input.checked });
       };
       reset = () => {
@@ -333,18 +343,18 @@ function registerPreferencesPage(api: PluginApi) {
 
       const root = h("div", { className: "sx" }, h("style", null, STYLE));
       root.append(
-        w.group("Connection",
-          w.hint(`Requests go to ${SCMSCX} first. The site's API sends no CORS header, so a page served from anywhere else cannot read its answers; a forwarder — an address that passes each request on to the site — is tried next. The plugin comes with one; put your own here to use it instead, or empty the field for none.`),
-          h("div", { className: "sx-row" }, h("label", null, "Forwarder"), forwarder, testBtn),
+        w.group(t("Connection"),
+          w.hint(t("Requests go to {site} first. The site's API sends no CORS header, so a page served from anywhere else cannot read its answers; a forwarder — an address that passes each request on to the site — is tried next. The plugin comes with one; put your own here to use it instead, or empty the field for none.", { site: SCMSCX })),
+          h("div", { className: "sx-row" }, h("label", null, t("Forwarder")), forwarder, testBtn),
           answer,
           status,
         ),
-        w.group("Requests",
+        w.group(t("Requests"),
           w.form([
-            { label: "Search", field: asYouType },
-            { label: "Minimaps", field: minimaps },
+            { label: t("Search"), field: asYouType },
+            { label: t("Minimaps"), field: minimaps },
           ]),
-          w.hint("Searching as you type sends a search at each pause; off, only Enter and the Search button do. Every minimap is one more request to scmscx.com: one for each result that scrolls into view, and one for the map whose details are shown. Both take effect when the search dialog is next opened."),
+          w.hint(t("Searching as you type sends a search at each pause; off, only Enter and the Search button do. Every minimap is one more request to scmscx.com: one for each result that scrolls into view, and one for the map whose details are shown. Both take effect when the search dialog is next opened.")),
         ),
       );
       body.append(root);
@@ -358,17 +368,17 @@ function registerPreferencesPage(api: PluginApi) {
 /* ── Find dialog ────────────────────────────────────────── */
 
 /** The dialog's title, and what it becomes while a map is on its way in. */
-const FIND_TITLE = "Find on scmscx.com";
+const FIND_TITLE = msg("Find on scmscx.com");
 
 /** The one request the results side has in flight, and the line each one puts up. */
 type Job = "connect" | "search" | "more" | "random" | "map";
 
 const JOB_TEXT: Record<Job, string> = {
-  connect: "Connecting to scmscx.com…",
-  search: "Searching scmscx.com…",
-  more: "Loading more results…",
-  random: "Picking a map at random…",
-  map: "Loading the map…",
+  connect: msg("Connecting to scmscx.com…"),
+  search: msg("Searching scmscx.com…"),
+  more: msg("Loading more results…"),
+  random: msg("Picking a map at random…"),
+  map: msg("Loading the map…"),
 };
 
 function openFind(api: PluginApi) {
@@ -402,8 +412,8 @@ function openFind(api: PluginApi) {
 
   /** Open what is selected; true closes the dialog. */
   const openSelected = async (): Promise<boolean> => {
-    if (busy) { status.busy("Still opening the last map…"); return false; }
-    if (!selected) { status.set("Pick a map in the list first."); return false; }
+    if (busy) { status.busy(t("Still opening the last map…")); return false; }
+    if (!selected) { status.set(t("Pick a map in the list first.")); return false; }
     const row = selected;
     busy = true;
     const stop = new AbortController();
@@ -411,9 +421,9 @@ function openFind(api: PluginApi) {
     // The footer is the host's: this says what the dialog is doing there and holds its
     // buttons, whether the Open button or a double-click on a row started it. The Cancel
     // beside the status line is in the body, so it stays live.
-    handle?.setBusy(`Opening ${row.name}…`);
+    handle?.setBusy(t("Opening {file}…", { file: row.name }));
     try {
-      if (!infos.has(row.id)) status.busy(`Loading ${row.name}…`);
+      if (!infos.has(row.id)) status.busy(t("Loading {name}…", { name: row.name }));
       const info = await infoFor(row.id, stop.signal);
       return await openMap(api, client, info, status, stop.signal);
     } catch (err) {
@@ -427,46 +437,46 @@ function openFind(api: PluginApi) {
   };
 
   handle = api.ui.dialog({
-    title: FIND_TITLE,
+    title: t(FIND_TITLE),
     size: "xl",
     tall: true,
     buttons: [
-      { label: "Open", primary: true, run: () => openSelected() },
-      { label: "Close" },
+      { label: t("Open"), primary: true, run: () => openSelected() },
+      { label: t("Close") },
     ],
     mount(body) {
       const root = h("div", { className: "sx" }, h("style", null, STYLE));
       body.append(root);
 
       /* Search controls */
-      const q = h("input", { className: "input sx-grow", type: "search", placeholder: "Scenario name, file name, unit or force names — or a map address from the site", value: settings.lastQuery, "aria-label": "Search" });
-      const searchBtn = w.button("Search", { className: "sm", onClick: () => { void runSearch(); } });
-      const randomBtn = w.button("Random", { className: "sm", title: "One map at random among the matches", onClick: () => { void pickRandom(); } });
+      const q = h("input", { className: "input sx-grow", type: "search", placeholder: t("Scenario name, file name, unit or force names — or a map address from the site"), value: settings.lastQuery, "aria-label": t("Search") });
+      const searchBtn = w.button(t("Search"), { className: "sm", onClick: () => { void runSearch(); } });
+      const randomBtn = w.button(t("Random"), { className: "sm", title: t("One map at random among the matches"), onClick: () => { void pickRandom(); } });
       const select = (label: string, options: readonly (readonly [string, string])[], onChange: () => void) =>
         h("select", { className: "select", style: "width: auto", "aria-label": label, onChange }, ...options.map(([v, text]) => h("option", { value: v }, text)));
-      const sortSel = select("Sort", SORTS, () => runSearch());
+      const sortSel = select(t("Sort"), SORTS.map(([v, label]) => [v, t(label)] as const), () => runSearch());
       sortSel.value = settings.sort;
-      const tilesetSel = select("Tileset", [["", "Any tileset"], ...TILESETS.map((t, i) => [t, TILESET_NAMES[i]] as const)], () => runSearch());
-      const minPlayers = h("input", { className: "input sx-num", type: "number", min: 0, max: 12, placeholder: "min", "aria-label": "Minimum human players", onChange: () => runSearch() });
-      const maxPlayers = h("input", { className: "input sx-num", type: "number", min: 0, max: 12, placeholder: "max", "aria-label": "Maximum human players", onChange: () => runSearch() });
-      const sizeSel = select("Minimum size", [["", "Any size"], ["64", "64 or larger"], ["96", "96 or larger"], ["128", "128 or larger"], ["192", "192 or larger"], ["256", "256"]], () => runSearch());
-      const moreBtn = w.button("More…", { className: "sm", onClick: () => { extra.style.display = extra.style.display === "none" ? "" : "none"; } });
+      const tilesetSel = select(t("Tileset"), [["", t("Any tileset")], ...TILESETS.map((key, i) => [key, t(TILESET_NAMES[i])] as const)], () => runSearch());
+      const minPlayers = h("input", { className: "input sx-num", type: "number", min: 0, max: 12, placeholder: t("min"), "aria-label": t("Minimum human players"), onChange: () => runSearch() });
+      const maxPlayers = h("input", { className: "input sx-num", type: "number", min: 0, max: 12, placeholder: t("max"), "aria-label": t("Maximum human players"), onChange: () => runSearch() });
+      const sizeSel = select(t("Minimum size"), [["", t("Any size")], ...[64, 96, 128, 192].map((n) => [String(n), t("{n} or larger", { n })] as const), ["256", "256"]], () => runSearch());
+      const moreBtn = w.button(t("More…"), { className: "sm", onClick: () => { extra.style.display = extra.style.display === "none" ? "" : "none"; } });
       const check = (label: string, checked: boolean, title?: string) => {
         const input = h("input", { type: "checkbox", checked, onChange: () => runSearch() });
         return { input, el: h("label", { className: "sx-check", title }, input, label) };
       };
-      const inUnits = check("units", true, "Match unit names");
-      const inForces = check("forces", true, "Match force names");
-      const inFiles = check("file names", true);
-      const inScenarios = check("scenario names", true);
-      const inDescriptions = check("descriptions", true);
-      const incBroken = check("broken", false, "Maps the site has marked as broken");
-      const incOutdated = check("outdated", false, "Maps the site has marked as outdated");
-      const incUnfinished = check("unfinished", false, "Maps the site has marked as unfinished");
-      const filters = h("div", { className: "sx-row wrap" }, sortSel, tilesetSel, h("span", { className: "sx-dim" }, "Players"), minPlayers, h("span", { className: "sx-dim" }, "–"), maxPlayers, sizeSel, moreBtn);
+      const inUnits = check(t("units"), true, t("Match unit names"));
+      const inForces = check(t("forces"), true, t("Match force names"));
+      const inFiles = check(t("file names"), true);
+      const inScenarios = check(t("scenario names"), true);
+      const inDescriptions = check(t("descriptions"), true);
+      const incBroken = check(t("broken"), false, t("Maps the site has marked as broken"));
+      const incOutdated = check(t("outdated"), false, t("Maps the site has marked as outdated"));
+      const incUnfinished = check(t("unfinished"), false, t("Maps the site has marked as unfinished"));
+      const filters = h("div", { className: "sx-row wrap" }, sortSel, tilesetSel, h("span", { className: "sx-dim" }, t("Players")), minPlayers, h("span", { className: "sx-dim" }, "–"), maxPlayers, sizeSel, moreBtn);
       const extra = h("div", { className: "sx-row wrap", style: "display: none" },
-        h("span", { className: "sx-dim" }, "Search in"), inUnits.el, inForces.el, inFiles.el, inScenarios.el, inDescriptions.el,
-        h("span", { className: "sx-dim", style: "margin-left: 8px" }, "Include"), incBroken.el, incOutdated.el, incUnfinished.el,
+        h("span", { className: "sx-dim" }, t("Search in")), inUnits.el, inForces.el, inFiles.el, inScenarios.el, inDescriptions.el,
+        h("span", { className: "sx-dim", style: "margin-left: 8px" }, t("Include")), incBroken.el, incOutdated.el, incUnfinished.el,
       );
 
       /* Lists and details */
@@ -485,7 +495,7 @@ function openFind(api: PluginApi) {
         list.classList.toggle("is-busy", text !== null);
         list.setAttribute("aria-busy", text !== null ? "true" : "false");
       };
-      const more = w.button("More results", { className: "sm", onClick: () => { void runSearch(true); } });
+      const more = w.button(t("More results"), { className: "sm", onClick: () => { void runSearch(true); } });
       more.style.display = "none";
       const count = h("span", { className: "sx-dim sx-grow" });
       const details = h("div", { className: "sx-details" });
@@ -501,7 +511,7 @@ function openFind(api: PluginApi) {
       const setJob = (next: Job | null) => {
         job = next;
         // Rows already listed are dimmed under a note; an empty list shows the ghost rows instead.
-        setCover(next !== null && rows.length > 0 ? JOB_TEXT[next] : null);
+        setCover(next !== null && rows.length > 0 ? t(JOB_TEXT[next]) : null);
         searchBtn.setBusy(next === "search" || next === "connect");
         searchBtn.disabled = next !== null;
         randomBtn.setBusy(next === "random" || next === "map");
@@ -518,7 +528,7 @@ function openFind(api: PluginApi) {
         const stop = new AbortController();
         inflight = stop;
         setJob(next);
-        status.busy(JOB_TEXT[next]);
+        status.busy(t(JOB_TEXT[next]));
         status.cancel(() => { stop.abort(); });
         return stop;
       };
@@ -585,7 +595,7 @@ function openFind(api: PluginApi) {
           const name = h("b", { className: "sx-item-name" }, row.name);
           const sub = h("div", { className: "sx-dim sx-item-sub" }, subText);
           const el = h("div", { className: `sx-item${thumbs ? "" : " no-thumb"}`, role: "option", onClick: () => { void pick(r!.row); }, onDblClick: () => { void openSelected().then((ok) => { if (ok) handle?.close(); }); } },
-            thumbs && picture(row.id, "sx-thumb", "no picture"),
+            thumbs && picture(row.id, "sx-thumb", t("no picture")),
             h("div", { className: "sx-item-text" }, name, sub),
           );
           r = { el, name, sub, row };
@@ -614,7 +624,7 @@ function openFind(api: PluginApi) {
           clear(list);
           if (unreachable) return;
           if (job) { list.append(...ghostRows(w, thumbs)); return; }
-          list.append(h("div", { className: "sx-faint", style: "padding: 8px" }, answered ? "Nothing found." : "Nothing loaded yet."));
+          list.append(h("div", { className: "sx-faint", style: "padding: 8px" }, answered ? t("Nothing found.") : t("Nothing loaded yet.")));
           return;
         }
         const listed = new Set(rows.map((r) => r.id));
@@ -630,41 +640,41 @@ function openFind(api: PluginApi) {
       /** The details pane's minimap, kept while the same map stays selected. */
       let bigPic: { id: string; el: HTMLElement } | null = null;
       const bigPicture = (id: string): HTMLElement => {
-        if (bigPic?.id !== id) bigPic = { id, el: picture(id, "sx-bigframe", "no minimap") };
+        if (bigPic?.id !== id) bigPic = { id, el: picture(id, "sx-bigframe", t("no minimap")) };
         return bigPic.el;
       };
 
       const renderDetails = () => {
         clear(details);
         if (unreachable) { details.append(unreachableNotice(w, unreachable, q.value, () => openSettings(api))); return; }
-        if (!selected) { details.append(h("p", { className: "sx-faint" }, "Pick a map to see its details.")); return; }
+        if (!selected) { details.append(h("p", { className: "sx-faint" }, t("Pick a map to see its details."))); return; }
         const row = selected;
         const info = infos.get(row.id);
         details.append(h("h3", null, info?.name || row.name));
         if (bigPics) details.append(bigPicture(row.id));
         if (!info) {
-          if (loading.has(row.id)) details.append(w.spinner({ label: "Loading the details…" }), ghostDetails(w));
-          else details.append(h("p", { className: "sx-dim" }, "The details could not be loaded."));
-          details.append(h("p", null, link(row.url, "Its page on scmscx.com")));
+          if (loading.has(row.id)) details.append(w.spinner({ label: t("Loading the details…") }), ghostDetails(w));
+          else details.append(h("p", { className: "sx-dim" }, t("The details could not be loaded.")));
+          details.append(h("p", null, link(row.url, t("Its page on scmscx.com"))));
           return;
         }
         const kv = h("div", { className: "sx-kv" });
         const pair = (k: string, v: string) => { if (v) kv.append(h("span", null, k), h("span", null, v)); };
-        pair("Files", info.fileNames.map((f) => f.name).join(", ") || row.fileNames.join(", "));
-        pair("Size", `${info.width}×${info.height}, ${tilesetName(info.tileset)}`);
-        pair("Players", playersLabel(info));
-        pair("Version", versionName(info.version));
-        pair("Triggers", triggersLabel(info));
-        pair("Objects", objectsLabel(info));
-        pair("EUD", eudLabel(info));
-        pair("File", formatSize(info.mpqSize));
-        pair("Uploaded", [formatDate(info.uploaded), info.uploadedBy && info.uploadedBy !== "anonymous" ? `by ${info.uploadedBy}` : ""].filter(Boolean).join(" "));
-        pair("Downloads", `${info.downloads}, ${info.views} view${info.views === 1 ? "" : "s"}`);
+        pair(t("Files"), info.fileNames.map((f) => f.name).join(", ") || row.fileNames.join(", "));
+        pair(t("Size"), `${info.width}×${info.height}, ${tilesetName(info.tileset, t)}`);
+        pair(t("Players"), playersLabel(info, t));
+        pair(t("Version"), versionName(info.version, t));
+        pair(t("Triggers"), triggersLabel(info, t));
+        pair(t("Objects"), objectsLabel(info, t));
+        pair("EUD", eudLabel(info, t));
+        pair(t("File"), formatSize(info.mpqSize));
+        pair(t("Uploaded"), [formatDate(info.uploaded), info.uploadedBy && info.uploadedBy !== "anonymous" ? t("by {name}", { name: info.uploadedBy }) : ""].filter(Boolean).join(" "));
+        pair(t("Downloads"), t("{downloads}, {n, plural, one {# view} other {# views}}", { downloads: info.downloads, n: info.views }));
         details.append(kv);
         if (info.description) details.append(h("p", { className: "sx-dim" }, info.description));
         const forces = info.forces.filter((f) => f.players.length);
-        if (forces.length) details.append(h("p", { className: "sx-faint" }, forces.map((f) => `${f.name || "Force"}: ${f.players.length} player${f.players.length === 1 ? "" : "s"}`).join(" · ")));
-        details.append(h("p", null, link(info.url, "Its page on scmscx.com")));
+        if (forces.length) details.append(h("p", { className: "sx-faint" }, forces.map((f) => t("{force}: {n, plural, one {# player} other {# players}}", { force: f.name || t("Force"), n: f.players.length })).join(" · ")));
+        details.append(h("p", null, link(info.url, t("Its page on scmscx.com"))));
       };
 
       const pick = async (row: SearchRow) => {
@@ -695,7 +705,9 @@ function openFind(api: PluginApi) {
         total = found.total;
         fetched = append ? fetched + found.fetched : found.fetched;
         selected = rows.find((r) => r.id === selected?.id) ?? null;
-        count.textContent = label ?? `${total} map${total === 1 ? "" : "s"}${rows.length < total ? `, ${rows.length} listed` : ""}`;
+        count.textContent = label ?? (rows.length < total
+          ? t("{n, plural, one {# map} other {# maps}}, {listed} listed", { n: total, listed: rows.length })
+          : t("{n, plural, one {# map} other {# maps}}", { n: total }));
         more.style.display = fetched < total && found.fetched > 0 ? "" : "none";
         renderList();
         renderDetails();
@@ -729,7 +741,7 @@ function openFind(api: PluginApi) {
         window.clearTimeout(timer);
         saveSettings(api, { ...loadSettings(api), lastQuery: q.value, sort: sortSel.value as Sort });
         const ref = parseMapRef(q.value);
-        if (ref && !append) { await showOne(ref, mine, "1 map, by address"); return; }
+        if (ref && !append) { await showOne(ref, mine, t("1 map, by address")); return; }
         const stop = begin(append ? "more" : "search");
         try {
           const found = await client.search(query(append ? fetched : 0), { signal: stop.signal });
@@ -753,7 +765,7 @@ function openFind(api: PluginApi) {
         try {
           const id = await client.random(query(), { signal: stop.signal });
           if (mine !== seq) return;
-          await showOne(id, mine, "1 map, at random");
+          await showOne(id, mine, t("1 map, at random"));
         } catch (err) {
           if (mine !== seq) return;
           end(stop);
@@ -768,7 +780,7 @@ function openFind(api: PluginApi) {
         window.clearTimeout(timer);
         if (!settings.searchAsYouType) return;
         // Say straight away that the typing was heard; the search itself waits for a pause.
-        if (!unreachable) status.busy(JOB_TEXT.search);
+        if (!unreachable) status.busy(t(JOB_TEXT.search));
         timer = window.setTimeout(() => { void runSearch(); }, 350);
       });
       q.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); window.clearTimeout(timer); void runSearch(); } });
@@ -782,11 +794,11 @@ function openFind(api: PluginApi) {
         end(first);
         status.set("");
         if (q.value.trim()) { void runSearch(); return; }
-        show(latest, false, `${latest.total} maps, newest uploads first`);
+        show(latest, false, t("{n, plural, one {# map} other {# maps}}, newest uploads first", { n: latest.total }));
       }).catch((err) => {
         if (mine !== seq) return;
         end(first);
-        if (wasAborted(err)) { status.set("Stopped."); return; }
+        if (wasAborted(err)) { status.set(t("Stopped.")); return; }
         unreachable = err instanceof ScmscxError ? err : new ScmscxError("unreachable", problem(err));
         status.set(problem(err), "error");
         count.textContent = "";
@@ -802,10 +814,13 @@ function openFind(api: PluginApi) {
 /* ── Activation ─────────────────────────────────────────── */
 
 export default function activate(api: PluginApi) {
+  api.i18n.register({ ko: KO });
+  t = (text, params) => api.i18n.t(text, params);
   // Named actions, so another plugin (or a future command palette) can open the search.
-  api.commands.register({ id: "find", title: "Find on scmscx.com…", run: () => openFind(api) });
-  api.commands.register({ id: "settings", title: "scmscx.com Settings…", run: () => openSettings(api) });
+  // Their labels are English; the host shows them through the catalogue above.
+  api.commands.register({ id: "find", title: msg("Find on scmscx.com…"), run: () => openFind(api) });
+  api.commands.register({ id: "settings", title: msg("scmscx.com Settings…"), run: () => openSettings(api) });
 
-  api.menu.add("File", { label: "Find on scmscx.com…", icon: "plugin", after: "Open Recent", command: "find" });
+  api.menu.add("File", { label: msg("Find on scmscx.com…"), icon: "plugin", after: "Open Recent", command: "find" });
   registerPreferencesPage(api);
 }

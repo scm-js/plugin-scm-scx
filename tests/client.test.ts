@@ -122,7 +122,7 @@ describe("ScmscxClient", () => {
     expect(err.attempts).toEqual([
       { base: "https://scmscx.com", reason: "Failed to fetch" },
       { base: "https://static.example", reason: "answered with something that is not the search API" },
-      { base: "https://down.example", reason: "answered 502" },
+      { base: "https://down.example", reason: "answered 502", status: 502 },
     ]);
     expect(client.base).toBeNull();
   });

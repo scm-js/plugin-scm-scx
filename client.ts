@@ -13,6 +13,7 @@
  * `/scmscx` to the site. `fetch` is injectable so the tests answer requests themselves.
  * No DOM.
  */
+import { english, msg, type Translate } from "./i18n";
 
 export const SCMSCX = "https://scmscx.com";
 
@@ -24,16 +25,17 @@ export type Sort =
   | "lastmodifiedold" | "lastmodifiednew"
   | "timeuploadedold" | "timeuploadednew";
 
+/** The labels are English, shown through the plugin's translator. */
 export const SORTS: readonly [Sort, string][] = [
-  ["relevancy", "Best match"],
-  ["timeuploadednew", "Newest upload"],
-  ["timeuploadedold", "Oldest upload"],
-  ["lastmodifiednew", "Recently modified"],
-  ["lastmodifiedold", "Least recently modified"],
-  ["scenario", "Scenario name A–Z"],
-  ["scenariodesc", "Scenario name Z–A"],
-  ["filename", "File name A–Z"],
-  ["filenamedesc", "File name Z–A"],
+  ["relevancy", msg("Best match")],
+  ["timeuploadednew", msg("Newest upload")],
+  ["timeuploadedold", msg("Oldest upload")],
+  ["lastmodifiednew", msg("Recently modified")],
+  ["lastmodifiedold", msg("Least recently modified")],
+  ["scenario", msg("Scenario name A–Z")],
+  ["scenariodesc", msg("Scenario name Z–A")],
+  ["filename", msg("File name A–Z")],
+  ["filenamedesc", msg("File name Z–A")],
 ];
 
 /** The tileset filters, in ERA order (the `tileset` number `map_info` reports). */
@@ -133,7 +135,10 @@ export type ErrorCode = "unreachable" | "network" | "not_found" | "http" | "bad_
 
 export interface Attempt {
   base: string;
+  /** In English; `attemptReason` says it in the user's language. */
   reason: string;
+  /** The HTTP status, when the base answered with one that was not a success. */
+  status?: number;
 }
 
 /** What a failed request becomes. `unreachable` lists what each base answered. */
@@ -150,21 +155,24 @@ export class ScmscxError extends Error {
     this.attempts = attempts;
   }
 
-  /** A sentence for the user. */
-  get sentence(): string {
+  /** A sentence for the user, in English. */
+  get sentence(): string { return this.say(english); }
+
+  /** A sentence for the user, through a translator. A network failure's own words are the browser's, shown as they are. */
+  say(t: Translate): string {
     switch (this.code) {
       case "unreachable":
-        return "scmscx.com could not be reached from this page.";
+        return t("scmscx.com could not be reached from this page.");
       case "network":
-        return `scmscx.com did not answer: ${this.message}`;
+        return t("scmscx.com did not answer: {error}", { error: this.message });
       case "not_found":
-        return "scmscx.com has no such map.";
+        return t("scmscx.com has no such map.");
       case "aborted":
-        return "Stopped.";
+        return t("Stopped.");
       case "bad_response":
-        return this.message;
+        return this.status ? t("scmscx.com answered {status} with something that is not JSON.", { status: this.status }) : t(this.message);
       default:
-        return `scmscx.com answered ${this.status}.`;
+        return t("scmscx.com answered {status}.", { status: this.status });
     }
   }
 }
@@ -335,6 +343,14 @@ export function mapInfoFrom(id: string, raw: RawInfo, names: RawFileName[] | nul
 /** What every route throws once the caller's signal has fired. */
 const stopped = () => new ScmscxError("aborted", "The request was stopped.");
 
+/** What one base answered, for the list under "could not be reached". */
+export function attemptReason(a: Attempt, t: Translate): string {
+  if (a.status !== undefined) return t("answered {status}", { status: a.status });
+  return a.reason === NOT_THE_API ? t(NOT_THE_API) : a.reason;
+}
+
+const NOT_THE_API = msg("answered with something that is not the search API");
+
 export class ScmscxClient {
   readonly bases: readonly string[];
   private active: string | null = null;
@@ -369,7 +385,7 @@ export class ScmscxClient {
         continue;
       }
       if (!res.ok) {
-        attempts.push({ base, reason: `answered ${res.status}` });
+        attempts.push({ base, reason: `answered ${res.status}`, status: res.status });
         continue;
       }
       let body: unknown;
@@ -377,11 +393,11 @@ export class ScmscxClient {
         body = JSON.parse(await res.text());
       } catch (err) {
         if (wasAborted(err)) throw stopped();
-        attempts.push({ base, reason: "answered with something that is not the search API" });
+        attempts.push({ base, reason: NOT_THE_API });
         continue;
       }
       if (!isSearchBody(body)) {
-        attempts.push({ base, reason: "answered with something that is not the search API" });
+        attempts.push({ base, reason: NOT_THE_API });
         continue;
       }
       this.active = base;
@@ -392,21 +408,21 @@ export class ScmscxClient {
 
   async search(q: SearchQuery, opts: RequestOptions = {}): Promise<SearchResult> {
     const body = await this.json(searchPath(q), opts.signal);
-    if (!isSearchBody(body)) throw new ScmscxError("bad_response", "scmscx.com answered the search with something unexpected.");
+    if (!isSearchBody(body)) throw new ScmscxError("bad_response", msg("scmscx.com answered the search with something unexpected."));
     return resultFrom(body);
   }
 
   /** One random map id among the query's matches. */
   async random(q: SearchQuery, opts: RequestOptions = {}): Promise<string> {
     const body = await this.json(randomPath(q), opts.signal);
-    if (typeof body !== "string" || !body) throw new ScmscxError("bad_response", "scmscx.com answered the random pick with something unexpected.");
+    if (typeof body !== "string" || !body) throw new ScmscxError("bad_response", msg("scmscx.com answered the random pick with something unexpected."));
     return body;
   }
 
   /** A map's details, with the file names the site knows it under (best effort). */
   async mapInfo(id: string, opts: RequestOptions = {}): Promise<MapInfo> {
     const raw = (await this.json(`/api/uiv2/map_info/${encodeURIComponent(id)}`, opts.signal)) as RawInfo;
-    if (!raw || typeof raw !== "object" || !raw.meta?.mpq_hash) throw new ScmscxError("bad_response", "scmscx.com answered without the map's file hash.");
+    if (!raw || typeof raw !== "object" || !raw.meta?.mpq_hash) throw new ScmscxError("bad_response", msg("scmscx.com answered without the map's file hash."));
     let names: RawFileName[] | null = null;
     try {
       const got = await this.json(`/api/uiv2/filenames2/${encodeURIComponent(id)}`, opts.signal);
