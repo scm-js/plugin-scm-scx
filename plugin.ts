@@ -8,7 +8,7 @@
  *   order, tileset, players and size, read a map's details with its minimap, and open
  *   it in the editor. A pasted map address (`https://scmscx.com/map/…`) opens that map's
  *   details straight away; Random picks one of the matches.
- * - A link to a map, `<editor>/scmscx/<id>` (`https://editor.scmjs.dev/scmscx/35b32Dsq`):
+ * - A link to a map, `<editor>/scmscx/<id>` (`https://scmjs.dev/editor/scmscx/35b32Dsq`):
  *   the editor starts with the search open on that map, and Open downloads it. Nothing is
  *   downloaded until the person opening the link says so.
  * - Edit ▸ Preferences ▸ Plugins ▸ scmscx.com: the forwarder address, for when the page
