@@ -75,7 +75,7 @@ export function triggersLabel(info: Pick<MapInfo, "triggers" | "briefingTriggers
 /**
  * The map id in something pasted from the site — `https://scmscx.com/map/35b32Dsq`, with or
  * without the scheme, a trailing path, a query or a hash — or an editor link to a map
- * (`https://editor.scmjs.dev/scmscx/35b32Dsq`). Null for anything else: a bare id is not
+ * (`https://scmjs.dev/editor/scmscx/35b32Dsq`). Null for anything else: a bare id is not
  * recognised, since it would be taken for a search word.
  */
 export function parseMapRef(text: string): string | null {
@@ -91,7 +91,7 @@ const LINK_PATH = /^(.*\/)scmscx\/([A-Za-z0-9]+)\/?$/;
 
 /**
  * The map id on the editor's own address, when it was opened from a link to a map on the
- * site (`https://editor.scmjs.dev/scmscx/35b32Dsq`). The editor answers any path with its
+ * site (`https://scmjs.dev/editor/scmscx/35b32Dsq`). The editor answers any path with its
  * one page, so nothing needs to exist at that path. Null for any other path.
  */
 export function mapIdOnPage(pathname: string): string | null {
