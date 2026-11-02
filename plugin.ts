@@ -1,5 +1,5 @@
 /**
- * scmscx.com — a plugin for the scmJS map editor (https://github.com/jeany55/scm-js).
+ * scmscx.com — a plugin for the scmJS map editor (https://github.com/scm-js/scm-js).
  *
  * scmscx.com is an archive of StarCraft maps with a search over their names, file names,
  * descriptions, unit and force names. This plugin puts that search in the editor:
