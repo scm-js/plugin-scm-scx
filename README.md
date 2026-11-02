@@ -1,102 +1,121 @@
 # scmscx.com plugin
 
 A plugin for [scmJS](https://github.com/scm-js/scm-js), the browser-based StarCraft 1 /
-Brood War map editor. It searches [scmscx.com](https://scmscx.com), an archive of
-StarCraft maps, from inside the editor and opens the map you pick. It reaches
-scmscx.com and the forwarder below and nothing else; the two menu items it adds carry
-its mark (a magnifier over a map tile, in teal) so it is plain which entries leave the
-browser.
+Brood War map editor. It searches [scmscx.com](https://scmscx.com), an archive of StarCraft
+maps, from inside the editor, and opens the map you pick.
+
+It contacts scmscx.com and the forwarder described below, and nothing else. Its menu item
+carries the plugin's mark (a teal magnifier over a map tile), so you can see that it uses
+the network.
 
 ## Install
 
-In scmJS: **Plugins ▸ Manage Plugins…**, paste
+The plugin comes with the editor and is on by default. If you turned it off, tick it on
+again in Plugins ▸ **Manage Plugins…**.
+
+To add it by hand, open Plugins ▸ **Manage Plugins…**, paste
 
 ```
 https://github.com/scm-js/plugin-scm-scx
 ```
 
-and press **Add**. It is in that list by default. To pin a version, add a ref:
-`github:scm-js/plugin-scm-scx@v1.0.0`.
+and press **Add**. To pin a version, add a tag: `github:scm-js/plugin-scm-scx@v1.4.0`.
 
-## What it adds
+## Searching
 
-- **File ▸ Find on scmscx.com…** (under Open Recent). The dialog opens on the newest
-  uploads. Type to search scenario names, file names, descriptions, unit and force names
-  (the same search as the site's own page, with its sort orders); filter by tileset, human
-  player count and minimum size; *More…* chooses which text is matched and whether maps
-  the site marks as broken, outdated or unfinished are included. Pick a map to see its
-  minimap and details: files, size and tileset, players, game version, triggers, units
-  and other objects, EUD use, upload and download counts, the description and the
-  forces. **Open** downloads it and opens it in the editor (a modified map goes through
-  the usual Close Scenario question first). **Random** picks one map among the matches.
-  Pasting a map address from the site (`https://scmscx.com/map/…`) shows that map.
-- **Links to a map.** `https://scmjs.dev/editor/scmscx/<id>`, where `<id>` is the last part
-  of the map's address on the site (`https://scmscx.com/map/35b32Dsq` →
-  `https://scmjs.dev/editor/scmscx/35b32Dsq`), starts the editor with the search dialog
-  open on that map. Nothing is downloaded until **Open** is pressed. An id the site does
-  not know leaves the newest uploads listed and says so. The same works on any editor
-  address with `scmscx/<id>` added to the end; the desktop editor has no address to link to.
-- **Edit ▸ Preferences ▸ Plugins ▸ scmscx.com** (also the Settings… button in the search
-  dialog when the site cannot be reached). The forwarder address, and a test; whether typing
-  searches at each pause or only Enter and the Search button do; and which minimaps the
-  search shows — beside each result and in the details, in the details only, or none.
-  Every search and every minimap is one request to the site, so both settings are ways to
-  send fewer.
+Choose File ▸ **Find on scmscx.com…** (just below Open Recent). The dialog opens on the
+newest uploads.
+
+- Type to search scenario names, file names, descriptions, and unit and force names. It is
+  the same search as the site's own, with the same sort orders.
+- Filter by tileset, number of human players and minimum size.
+- **More…** chooses which text is searched, and whether to include maps the site marks as
+  broken, outdated or unfinished.
+- Pick a map to see its minimap and details: size, tileset, players, triggers, units,
+  description, forces, download counts and more.
+- **Open** downloads the map and opens it in the editor. If your current map has unsaved
+  changes, the editor asks about them first.
+- **Random** picks one map among the matches.
+
+You can also paste a map's address from the site (`https://scmscx.com/map/…`) into the
+search box to show that map.
+
+## Links to a map
+
+Add `scmscx/<id>` to the editor's address to open the search dialog on one map. The id is
+the last part of the map's address on the site. For example, `https://scmscx.com/map/35b32Dsq`
+becomes:
+
+```
+https://scmjs.dev/editor/scmscx/35b32Dsq
+```
+
+Nothing is downloaded until you press **Open**. If the site does not know the id, the
+dialog says so and lists the newest uploads. The desktop editor has no address, so these
+links only work in the browser.
+
+## Settings
+
+The plugin's settings are in Edit ▸ **Preferences…** ▸ Plugins ▸ scmscx.com. The search
+dialog also has a **Settings…** button when the site cannot be reached. You can set:
+
+- the forwarder address, with a **Test** button
+- whether typing searches at each pause, or only Enter and the **Search** button do
+- where minimaps are shown: beside each result and in the details, in the details only, or
+  nowhere
+
+Every search and every minimap is one request to the site. Turning off search as you type,
+or showing fewer minimaps, sends fewer requests.
 
 ## Reaching the site
 
-Requests go to `https://scmscx.com` directly. Its API sends no CORS header, so a browser
-lets only pages served from scmscx.com read the answers: from an editor served anywhere
-else that first try fails. The minimaps still show either way, since an image is not
-subject to that rule.
+The plugin asks `https://scmscx.com` first. The site's API sends no CORS header, so a
+browser only lets pages served from scmscx.com read its answers. From an editor anywhere
+else, that first request fails. Minimaps still show, because images are not covered by
+that rule.
 
-So the plugin then goes through a *forwarder* — an address that passes each request on
-to scmscx.com and adds the header. One ships as the default, so the plugin works out of
-the box from any editor:
+The plugin then goes through a forwarder: an address that passes each request on to
+scmscx.com and adds the header. The default is:
 
 ```
 https://scm-scx-forwarder.scmjs.dev
 ```
 
-Which means that, unless your editor is served from scmscx.com, your searches reach the
-site by way of that host. Its source is
-[scm-js/cloudflare-scm-scx-forwarder](https://github.com/scm-js/cloudflare-scm-scx-forwarder)
-— a Cloudflare Worker that forwards GET requests for the routes below and nothing else,
-and needs no account. It keeps the site's *answers* for a while, so that a map's details
-are asked for once rather than once per reader — seven days for a map's details, six
-hours for its file names, five minutes for a search, never for a random pick — and keeps
-nothing about who asked for them. Deploy your own from that repository and put its
-address in the plugin's Preferences page to use it instead, or empty the field for no forwarder at all.
+So unless your editor is served from scmscx.com, your searches pass through that host. Its
+source is [scm-js/cloudflare-scm-scx-forwarder](https://github.com/scm-js/cloudflare-scm-scx-forwarder).
+It is a Cloudflare Worker that forwards GET requests for the routes below and refuses
+anything else. It keeps the site's answers for a while, from five minutes for a search to
+thirty days for a map file, and never for a random pick. It keeps nothing about who asked.
 
-The site is asked first every time, so nothing changes for an editor served from
-scmscx.com, and the forwarder falls out of the picture the day the site sends the
-header. If neither answers, the dialog says so, links to the site's search page for the
-query, and reminds you that a downloaded map can be dropped onto the editor.
+To use your own, deploy that repository and put its address in the plugin's settings. To
+use no forwarder, empty the field.
+
+If the site starts sending the header, the first request succeeds and the forwarder is no
+longer used. If neither answers, the dialog says so and links to the site's search page
+for your query. You can also download a map from the site and drop it onto the editor.
 
 ## The site's API
 
-scmscx.com has no documented API. Its About page says the routes its own front end uses
-are open and unauthenticated, may change without warning, and asks anyone building on
-them to get in touch. The plugin uses these, exactly as the front end does:
+scmscx.com has no documented API. Its About page says the routes its own pages use are
+open and need no login, may change without warning, and asks anyone building on them to
+get in touch. The plugin uses these, the same way the site does:
 
 | Route | For |
 | --- | --- |
-| `/api/uiv2/search[/{words}]?…` | the search; parameters at their default are left out, like the site does |
-| `/api/uiv2/random[/{words}]?…` | one map id among the matches |
-| `/api/uiv2/map_info/{id}` | a map's details |
-| `/api/uiv2/filenames2/{id}` | the file names the site knows it under |
-| `/api/uiv2/minimap/{id}` | the minimap PNG (as an `<img>`) |
-| `/api/maps/{mpq_hash}` | the map file |
+| `/api/uiv2/search[/{words}]?…` | The search. Parameters left at their default are left out, as on the site. |
+| `/api/uiv2/random[/{words}]?…` | One map id among the matches. |
+| `/api/uiv2/map_info/{id}` | A map's details. |
+| `/api/uiv2/filenames2/{id}` | The file names the site knows the map under. |
+| `/api/uiv2/minimap/{id}` | The minimap PNG, as an image. |
+| `/api/maps/{mpq_hash}` | The map file. |
 
 One map is fetched at a time, when you pick it. Nothing is fetched in bulk.
 
-## Layout
+## Development
 
-`plugin.ts` is the dialogs (plain DOM), `client.ts` the typed client for the routes above
-(`fetch` injected, so the tests answer requests themselves), `format.ts` the labels.
-Types come from [`@scm-js/plugin-api`](https://github.com/scm-js/plugin-api), a devDependency
-generated from the editor's own `src/plugins/api.ts`; `npm update @scm-js/plugin-api` takes the
-newest contract.
+`plugin.ts` is the dialogs. `client.ts` is the client for the routes above; it takes
+`fetch` as a parameter, so the tests can answer requests themselves. `format.ts` has the
+labels. The types come from [`@scm-js/plugin-api`](https://github.com/scm-js/plugin-api).
 
 ```sh
 npm install
